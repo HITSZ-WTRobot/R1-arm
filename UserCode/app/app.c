@@ -17,14 +17,14 @@
 #define TOGGLE() HAL_GPIO_TogglePin(SOLENOID_VALVE_GPIO_PORT, SOLENOID_VALVE_GPIO_PIN)                 // 翻转状态
 
 // 控制参数配置
-#define ROTATE_TOLERANCE 0.05f // 旋转角度误差 (rad)
-#define LIFT_TOLERANCE 0.02f   // 升降角度误差 (rad)
-#define CATCH_TOLERANCE 0.03f  // 抓取角度误差 (rad)
-#define ACTION_DELAY_MS 300    // 动作稳定延时
+#define ROTATE_TOLERANCE 0.05f // 旋转角度误差 (度)
+#define LIFT_TOLERANCE 0.02f   // 升降角度误差 (度)
+#define CATCH_TOLERANCE 0.03f  // 抓取角度误差 (度)
+#define ACTION_DELAY_MS 5000    // 动作稳定延时
 
 // 机械臂关键位置参数、
 #define PICK_ROTATE_ANGLE 0.0f  // 抓取位旋转角度
-#define PLACE_ROTATE_ANGLE 1.5f // 放置位旋转角度
+#define PLACE_ROTATE_ANGLE 90.0f // 放置位旋转角度
 #define PICK_LIFT_ANGLE 1.2f    // 抓取位升降角度
 #define PLACE_LIFT_ANGLE 0.5f   // 放置位升降角度
 #define CATCH_CLOSE_ANGLE 1.8f  // 抓取结构推出时电机旋转角度
@@ -80,6 +80,8 @@ void TIM_Callback(TIM_HandleTypeDef *htim)
      * 只有被启用 (hctrl->enable == true) 的控制实例才会执行计算
      */
     Motor_PosCtrlCalculate(&pos_rotate_motor);
+    Motor_PosCtrlCalculate(&pos_raiseandlower_motor);
+    Motor_PosCtrlCalculate(&pos_catch_motor);
     /**
      * 发送控制信号
      *
@@ -130,19 +132,19 @@ void DJI_Control_Init()
                                 .auto_zero = false,       //< 是否在启动时自动清零角度
                                 .hcan = &hcan1,           //< 电机挂载在的 CAN 句柄
                                 .motor_type = M2006_C610, //< 电机类型
-                                .id1 = 3,                 //< 电调 ID (1~8)
+                                .id1 = 1,                 //< 电调 ID (1~8)
                             });
     DJI_Init(&raiseandlower_motor, (DJI_Config_t){
                                        .auto_zero = false,       //< 是否在启动时自动清零角度
                                        .hcan = &hcan1,           //< 电机挂载在的 CAN 句柄
                                        .motor_type = M3508_C620, //< 电机类型
-                                       .id1 = 1,                 //< 电调 ID (1~8)
+                                       .id1 = 2,                 //< 电调 ID (1~8)
                                    });
     DJI_Init(&catch_motor, (DJI_Config_t){
                                .auto_zero = false,       //< 是否在启动时自动清零角度
                                .hcan = &hcan1,           //< 电机挂载在的 CAN 句柄
                                .motor_type = M2006_C610, //< 电机类型
-                               .id1 = 2,                 //< 电调 ID (1~8)
+                               .id1 = 3,                 //< 电调 ID (1~8)
                            });
     /**
      * Step4: 初始化电机控制实例
@@ -254,12 +256,12 @@ void DJI_Control_Init()
      * 控制实例在初始化时默认是启动的，所以大部分情况此步可以省略。
      * 但是在有多个控制实例的情况下，必须仅保持一个控制实例开启
      */
-    __MOTOR_CTRL_DISABLE(&rotate_motor);
-    __MOTOR_CTRL_ENABLE(&rotate_motor);
-    __MOTOR_CTRL_DISABLE(&raiseandlower_motor);
-    __MOTOR_CTRL_ENABLE(&raiseandlower_motor);
-    __MOTOR_CTRL_DISABLE(&catch_motor);
-    __MOTOR_CTRL_ENABLE(&catch_motor);
+    __MOTOR_CTRL_DISABLE(&vel_rotate_motor);
+    __MOTOR_CTRL_ENABLE(&pos_catch_motor);
+    __MOTOR_CTRL_DISABLE(&vel_raiseandlower_motor);
+    __MOTOR_CTRL_ENABLE(&pos_raiseandlower_motor);
+    __MOTOR_CTRL_DISABLE(&vel_catch_motor);
+    __MOTOR_CTRL_ENABLE(&pos_catch_motor);
     /*
      * Step6: 注册定时器回调并开启定时器
      *
@@ -306,6 +308,7 @@ static uint8_t Motor_Pos_Control(Motor_PosCtrl_t *pos_ctrl, DJI_t *motor,
 
         osDelay(10); // 10ms轮询一次
     }
+   return 1;
 }
 
 /**
@@ -415,12 +418,19 @@ uint8_t Arm_Pick_Place_Process(void)
  */
 void Arm_control(void *argument)
 {
-    osDelay(1000); // 等待系统初始化完成
+    osDelay(5000); // 等待系统初始化完成
                    // printf("机械臂控制线程启动\r\n");
-
+    arm_state = ARM_STATE_ROTATE_TO_PLACE;
+    Arm_Rotate(-2260.0f);
+    osDelay(ACTION_DELAY_MS);
+    arm_state = ARM_STATE_ROTATE_RESET;
+    Arm_Rotate(PICK_ROTATE_ANGLE);
+    osDelay(ACTION_DELAY_MS);
     while (1)
     {
-        switch (arm_state)
+       
+        
+        /*switch (arm_state)
         {
         case ARM_STATE_IDLE:
             // 空闲状态：可通过外部触发调用 Arm_Pick_Place_Process()
@@ -438,7 +448,8 @@ void Arm_control(void *argument)
             // 流程执行中，无需额外处理
             osDelay(10);
             break;
-        }
+        }*/
+       break;
     }
 }
 
