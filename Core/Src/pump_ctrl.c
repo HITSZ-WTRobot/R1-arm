@@ -1,4 +1,5 @@
 #include "pump_ctrl.h"
+#include "gpio.h"
 
 void Pump_SetPower(uint8_t power)
 {
@@ -7,4 +8,16 @@ void Pump_SetPower(uint8_t power)
     uint32_t pulse  = period * (100 - power) / 100;  // 反向计算
 
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pulse);
+}
+
+// 打开电磁阀：PC0 = 1
+void Pump_ValveOn(void)
+{
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, GPIO_PIN_SET);
+}
+
+// 关闭电磁阀：PC0 = 0
+void Pump_ValveOff(void)
+{
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, GPIO_PIN_RESET);
 }

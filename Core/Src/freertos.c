@@ -145,14 +145,17 @@ void PumpPWMTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    Pump_SetPower(30); // 设置气泵功率为30%
-    osDelay(1000);
-    Pump_SetPower(70); // 设置气泵功率为70%
-    osDelay(1000);
-    Pump_SetPower(0); // 设置气泵功率为0%
-    osDelay(1000);
-    Pump_SetPower(100); // 设置气泵功率为100%
-    osDelay(1000);
+    // 示例：设置气泵功率为75%
+    Pump_SetPower(75);
+    // 打开电磁阀
+    Pump_ValveOn();
+    osDelay(5000); // 运行5秒
+
+    // 设置气泵功率为0（关闭）
+    Pump_SetPower(0);
+    // 关闭电磁阀
+    Pump_ValveOff();
+    osDelay(5000); // 停止5秒
   }
   /* USER CODE END PumpPWMTask */
 }
