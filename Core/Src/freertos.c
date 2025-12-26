@@ -22,7 +22,9 @@
 #include "task.h"
 #include "main.h"
 #include "cmsis_os.h"
+#include "tim.h"
 #include "pump_ctrl.h"
+#include "app.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -66,6 +68,25 @@ const osThreadAttr_t PumpPWMTask_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+
+//机械臂初始化任务声明
+/* Definitions for arm_init */
+osThreadId_t arm_initHandle;
+const osThreadAttr_t arm_init_attributes = {
+  .name = "arm_init",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityRealtime7,
+};
+
+//机械臂控制任务声明
+/* Definitions for arm_control */
+osThreadId_t arm_controlHandle;
+const osThreadAttr_t arm_control_attributes = {
+  .name = "arm_control",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal6,
+};
+
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -108,6 +129,14 @@ void MX_FREERTOS_Init(void) {
   //创建气泵PWM任务
   PumpPWMTaskHandle = osThreadNew(PumpPWMTask, NULL, &PumpPWMTask_attributes);
   
+  //创建机械臂初始化任务
+  /* creation of arm_init */
+  arm_initHandle = osThreadNew(Arm_Init, NULL, &arm_init_attributes);
+
+  //创建机械臂控制任务
+  /* creation of arm_control */
+  arm_controlHandle = osThreadNew(Arm_control, NULL, &arm_control_attributes);
+
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */

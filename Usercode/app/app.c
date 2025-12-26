@@ -263,11 +263,12 @@ void DJI_Control_Init()
     __MOTOR_CTRL_DISABLE(&vel_catch_motor);
     __MOTOR_CTRL_ENABLE(&pos_catch_motor);
     /*
-     * Step6: 启动用于控制的定时器中断
+     * Step6: 注册定时器回调并开启定时器
      *
-     * 不再通过 HAL_TIM_RegisterCallback 注册，直接在
-     * HAL_TIM_PeriodElapsedCallback 中调用 TIM_Callback
+     * 需要在 STM32CubeMX -> `Project Manager` -> `Advanced Settings`
+     *  -> `Register Callback` 中启用 TIM 回调
      */
+    HAL_TIM_RegisterCallback(&htim3, HAL_TIM_PERIOD_ELAPSED_CB_ID, TIM_Callback);
     HAL_TIM_Base_Start_IT(&htim3);
 }
 /**
