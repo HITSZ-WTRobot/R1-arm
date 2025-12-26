@@ -268,8 +268,8 @@ void DJI_Control_Init()
      * 需要在 STM32CubeMX -> `Project Manager` -> `Advanced Settings`
      *  -> `Register Callback` 中启用 TIM 回调
      */
-    HAL_TIM_RegisterCallback(&htim6, HAL_TIM_PERIOD_ELAPSED_CB_ID, TIM_Callback);
-    HAL_TIM_Base_Start_IT(&htim6);
+    HAL_TIM_RegisterCallback(&htim3, HAL_TIM_PERIOD_ELAPSED_CB_ID, TIM_Callback);
+    HAL_TIM_Base_Start_IT(&htim3);
 }
 /**
  * 定时器回调函数，用于定时进行 PID 计算和 CAN 指令发送

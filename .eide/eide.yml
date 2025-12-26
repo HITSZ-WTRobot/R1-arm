@@ -1,28 +1,29 @@
 version: "4.1"
-name: DJI_a_eide
+name: R1-arm
 type: ARM
 deviceName: null
 packDir: null
 srcDirs:
-  - UserCode
+  - Core
   - Drivers
   - Middlewares
-  - Core
+  - Usercode
 virtualFolder:
   name: <virtual_root>
   files:
-    - path: startup_stm32f427xx.s
+    - path: startup_stm32f407xx.s
+    - path: STM32F407XX_FLASH.ld
   folders: []
 dependenceList: []
 outDir: build
 miscInfo:
-  uid: 54a0a3980341cb0c8a33f5748a395bcb
+  uid: 8733c7e241621924f6109b18f1d302df
 targets:
   Debug:
     cppPreprocessAttrs:
       defineList:
         - USE_HAL_DRIVER
-        - STM32F427xx
+        - STM32F407xx
       incList:
         - Core/Inc
         - Drivers/STM32F4xx_HAL_Driver/Inc
@@ -32,7 +33,9 @@ targets:
         - Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F
         - Drivers/CMSIS/Device/ST/STM32F4xx/Include
         - Drivers/CMSIS/Include
-        - UserCode
+        - Usercode/drivers
+        - Usercode/app
+        - Usercode
       libList: []
     excludeList: []
     toolchain: GCC
@@ -69,7 +72,7 @@ targets:
             LIB_FLAGS: -lm
             output-format: elf
             remove-unused-input-sections: true
-        scatterFilePath: STM32F427XX_FLASH.ld
+        scatterFilePath: STM32F407XX_FLASH.ld
         storageLayout:
           RAM: []
           ROM: []

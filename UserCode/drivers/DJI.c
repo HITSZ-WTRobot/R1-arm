@@ -168,10 +168,7 @@ void DJI_CAN_FilterInit(CAN_HandleTypeDef* hcan, const uint32_t filter_bank)
 
 /**
  * CAN FIFO0 接收回调函数
- * @attention 必须*注册*回调函数或者在更高级的回调函数内调用此回调函数
- * @code 使用
- *          HAL_CAN_RegisterCallback(hcan, HAL_CAN_RX_FIFO0_MSG_PENDING_CB_ID, DJI_CAN_Fifo0ReceiveCallback);
- *       来注册回调函数
+ * 可在 HAL_CAN_RxFifo0MsgPendingCallback 中直接调用此函数
  * @param hcan
  */
 void DJI_CAN_Fifo0ReceiveCallback(CAN_HandleTypeDef* hcan)

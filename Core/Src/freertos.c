@@ -22,6 +22,9 @@
 #include "task.h"
 #include "main.h"
 #include "cmsis_os.h"
+#include "tim.h"
+#include "pump_ctrl.h"
+#include "app.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -52,8 +55,21 @@ osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityNormal,
 };
+
+/* Private function prototypes -----------------------------------------------*/
+/* USER CODE BEGIN FunctionPrototypes */
+// 添加气泵PWM任务相关声明
+void PumpPWMTask(void *argument);
+osThreadId_t PumpPWMTaskHandle;
+const osThreadAttr_t PumpPWMTask_attributes = {
+  .name = "PumpPWMTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+
+//机械臂初始化任务声明
 /* Definitions for arm_init */
 osThreadId_t arm_initHandle;
 const osThreadAttr_t arm_init_attributes = {
@@ -61,6 +77,8 @@ const osThreadAttr_t arm_init_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityRealtime7,
 };
+
+//机械臂控制任务声明
 /* Definitions for arm_control */
 osThreadId_t arm_controlHandle;
 const osThreadAttr_t arm_control_attributes = {
@@ -69,14 +87,9 @@ const osThreadAttr_t arm_control_attributes = {
   .priority = (osPriority_t) osPriorityNormal6,
 };
 
-/* Private function prototypes -----------------------------------------------*/
-/* USER CODE BEGIN FunctionPrototypes */
-
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
-extern void Arm_Init(void *argument);
-extern void Arm_control(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -110,14 +123,20 @@ void MX_FREERTOS_Init(void) {
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+
+  //创建气泵PWM任务
+  PumpPWMTaskHandle = osThreadNew(PumpPWMTask, NULL, &PumpPWMTask_attributes);
+  
+  //创建机械臂初始化任务
   /* creation of arm_init */
   arm_initHandle = osThreadNew(Arm_Init, NULL, &arm_init_attributes);
 
+  //创建机械臂控制任务
   /* creation of arm_control */
   arm_controlHandle = osThreadNew(Arm_control, NULL, &arm_control_attributes);
 
-  /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -146,6 +165,27 @@ void StartDefaultTask(void *argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+void PumpPWMTask(void *argument)
+{
+  /* USER CODE BEGIN PumpPWMTask */
+  // 启动 TIM3 通道1 PWM 输出
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+  /* Infinite loop */
+  for(;;)
+  {
+    // 示例：设置气泵功率为75%
+    Pump_SetPower(75);
+    // 打开电磁阀
+    Pump_ValveOn();
+    osDelay(2000); // 运行5秒
 
+    // 设置气泵功率为0（关闭）
+    Pump_SetPower(0);
+    // 关闭电磁阀
+    Pump_ValveOff();
+    osDelay(2000); // 停止5秒
+  }
+  /* USER CODE END PumpPWMTask */
+}
 /* USER CODE END Application */
 
