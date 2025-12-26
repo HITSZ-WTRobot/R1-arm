@@ -10,13 +10,13 @@ void Pump_SetPower(uint8_t power)
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pulse);
 }
 
-// 打开继电器：PE3 = 1（Relay0）
+// 打开继电器(电磁阀)：PE3 = 1（Relay0）
 void Pump_ValveOn(void)
 {
     HAL_GPIO_WritePin(Relay0_GPIO_Port, Relay0_Pin, GPIO_PIN_SET);
 }
 
-// 关闭继电器：PE3 = 0（Relay0）
+// 关闭继电器（电磁阀）：PE3 = 0（Relay0）
 void Pump_ValveOff(void)
 {
     HAL_GPIO_WritePin(Relay0_GPIO_Port, Relay0_Pin, GPIO_PIN_RESET);
