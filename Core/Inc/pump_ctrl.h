@@ -9,4 +9,6 @@ void Pump_SetPower(uint8_t power);
 void Pump_ValveOn(void);   // 打开电磁阀
 void Pump_ValveOff(void);  // 关闭电磁阀
 
+// 继电器上电控制（PE2）
+void Pump_ValvePowerOn(void); // 继电器上电
 /* USER CODE END 0 */

@@ -141,7 +141,6 @@ void PumpPWMTask(void *argument)
   /* USER CODE BEGIN PumpPWMTask */
   // 启动 TIM3 通道1 PWM 输出
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
-
   /* Infinite loop */
   for(;;)
   {
@@ -149,13 +148,13 @@ void PumpPWMTask(void *argument)
     Pump_SetPower(75);
     // 打开电磁阀
     Pump_ValveOn();
-    osDelay(5000); // 运行5秒
+    osDelay(2000); // 运行5秒
 
     // 设置气泵功率为0（关闭）
     Pump_SetPower(0);
     // 关闭电磁阀
     Pump_ValveOff();
-    osDelay(5000); // 停止5秒
+    osDelay(2000); // 停止5秒
   }
   /* USER CODE END PumpPWMTask */
 }
