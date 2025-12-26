@@ -33,7 +33,8 @@ targets:
         - Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F
         - Drivers/CMSIS/Device/ST/STM32F4xx/Include
         - Drivers/CMSIS/Include
-        - Usercode/driver
+        - Usercode/drivers
+        - Usercode
       libList: []
     excludeList: []
     toolchain: GCC

@@ -195,8 +195,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   {
     HAL_IncTick();
   }
-  /* USER CODE BEGIN Callback 1 */
 
+  /* USER CODE BEGIN Callback 1 */
+  /* 调用机械臂控制定时回调（使用 TIM3 作为控制周期定时器） */
+  if (htim->Instance == TIM3)
+  {
+    extern void TIM_Callback(TIM_HandleTypeDef *htim);
+    TIM_Callback(htim);
+  }
   /* USER CODE END Callback 1 */
 }
 
