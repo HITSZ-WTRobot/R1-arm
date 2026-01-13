@@ -126,6 +126,9 @@ Motor_PosCtrl_t pos_catch_motor;
 Motor_VelCtrl_t vel_rotate_motor;
 Motor_VelCtrl_t vel_raiseandlower_motor;
 Motor_VelCtrl_t vel_catch_motor;
+
+
+extern void Motor_VelCtrl_PIDReset(Motor_VelCtrl_t *hctrl);
 /*
     相关函数
  */
@@ -441,6 +444,23 @@ void Arm_Init(void *argument)
     osThreadExit();
 }
 
+// 将当前所有相关电机安全停机：先清零电流指令，再关闭控制环
+static void Arm_SafeStopAllMotors(void)
+{
+    // 清零当前三轴电机的电流指令（下一个 CAN 周期即发送 0）
+    catch_motor.iq_cmd        = 0;
+    raiseandlower_motor.iq_cmd = 0;
+    rotate_motor.iq_cmd       = 0;
+
+    // 禁用对应的速度环和位置环控制实例，停止后续 PID 更新
+    __MOTOR_CTRL_DISABLE(&vel_catch_motor);
+    __MOTOR_CTRL_DISABLE(&pos_catch_motor);
+    __MOTOR_CTRL_DISABLE(&vel_raiseandlower_motor);
+    __MOTOR_CTRL_DISABLE(&pos_raiseandlower_motor);
+    __MOTOR_CTRL_DISABLE(&vel_rotate_motor);
+    __MOTOR_CTRL_DISABLE(&pos_rotate_motor);
+}
+
 // 堵转处理：进入错误状态并关闭执行机构
 static void Arm_OnStall(void)
 {
@@ -450,11 +470,8 @@ static void Arm_OnStall(void)
         arm_state_before_error = arm_state;
     }
 
-    // 关闭所有相关电机控制
-    __MOTOR_CTRL_DISABLE(&vel_catch_motor);
-    __MOTOR_CTRL_DISABLE(&pos_catch_motor);
-    __MOTOR_CTRL_DISABLE(&vel_raiseandlower_motor);
-    __MOTOR_CTRL_DISABLE(&pos_raiseandlower_motor);
+    // 安全停机：先拉到零指令再关闭所有相关电机控制
+    Arm_SafeStopAllMotors();
 
     // 标记机械臂错误状态，由控制线程决定后续如何恢复
     arm_state = ARM_STATE_ERROR;
