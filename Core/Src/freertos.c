@@ -62,6 +62,7 @@ const osThreadAttr_t defaultTask_attributes = {
 // 来自 Usercode/app/app.c 的机械臂任务函数声明
 extern void Arm_Init(void *argument);
 extern void Arm_Control(void *argument);
+extern void Arm_StallMonitor(void *argument);
 
 //机械臂初始化任务声明
 /* Definitions for arm_init */
@@ -79,6 +80,14 @@ const osThreadAttr_t arm_control_attributes = {
   .name = "arm_control",
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal6,
+};
+
+// 机械臂堵转监视任务声明
+osThreadId_t arm_stallMonitorHandle;
+const osThreadAttr_t arm_stallMonitor_attributes = {
+  .name = "arm_stall",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 
 /* USER CODE END FunctionPrototypes */
@@ -127,6 +136,9 @@ void MX_FREERTOS_Init(void) {
   //创建机械臂控制任务
   /* creation of arm_control */
   arm_controlHandle = osThreadNew(Arm_Control, NULL, &arm_control_attributes);
+
+  // 创建机械臂堵转监视任务
+  arm_stallMonitorHandle = osThreadNew(Arm_StallMonitor, NULL, &arm_stallMonitor_attributes);
 
   /* USER CODE END RTOS_THREADS */
 

@@ -14,6 +14,15 @@
 #define CATCH_TOLERANCE 0.03f  // 抓取角度误差 (度)
 #define ACTION_DELAY_MS 5000    // 动作稳定延时
 
+// 堵转检测参数（可根据实际调节）
+#define STALL_VEL_TH_CATCH      10.0f   // 抓取电机判定为几乎不转的速度阈值
+#define STALL_OUT_TH_CATCH      1500.0f // 抓取电机判定为“用力很大”的电流/输出阈值
+#define STALL_VEL_TH_LIFT       5.0f    // 升降电机速度阈值
+#define STALL_OUT_TH_LIFT       3000.0f // 升降电机输出阈值
+#define STALL_VEL_TH_ROTATE     5.0f    // 旋转电机速度阈值
+#define STALL_OUT_TH_ROTATE     2000.0f // 旋转电机输出阈值
+#define STALL_CONFIRM_MS        200u    // 堵转状态持续多久判定为真正堵转
+
 // 机械臂关键位置参数、
 #define PICK_ROTATE_ANGLE 0.0f  // 抓取位旋转角度
 #define PLACE_ROTATE_ANGLE 90.0f // 放置位旋转角度
@@ -38,6 +47,9 @@ typedef enum
     ARM_STATE_ERROR            // 错误
 } Arm_StateTypeDef;
 Arm_StateTypeDef arm_state = ARM_STATE_IDLE;
+
+// 记录进入错误状态之前的流程阶段，用于下次重试从该阶段开始
+static Arm_StateTypeDef arm_state_before_error = ARM_STATE_IDLE;
 
 #define KEY_PRESSED_LEVEL   GPIO_PIN_RESET
 #define KEY_DEBOUNCE_MS     50u
@@ -120,10 +132,10 @@ Motor_VelCtrl_t vel_catch_motor;
 static uint8_t Motor_Pos_Control(Motor_PosCtrl_t *pos_ctrl, DJI_t *motor, float target_angel, float tolerance, const char *motor_name);
 uint8_t Arm_Rotate(float target_angel);
 uint8_t Arm_Lift(float target_angel);
-uint8_t Arm_Rotate(float target_angel);
 uint8_t Arm_Catch(float target_angel);
 uint8_t Arm_Pick_Place_Process(void);
 void motor_stop(void);
+void Arm_StallMonitor(void *argument);
 
 /*static void drawer_pushout_move_to_end(int dir)
 {
@@ -406,6 +418,7 @@ void Arm_Init(void *argument)
     __MOTOR_CTRL_DISABLE(&vel_raiseandlower_motor);
     __MOTOR_CTRL_DISABLE(&pos_raiseandlower_motor);
 
+    // 调试代码：按键控制机械臂动作
 
     for(;;){
         uint8_t key0 = Key0_Pressed(); 
@@ -428,16 +441,47 @@ void Arm_Init(void *argument)
     osThreadExit();
 }
 
+// 堵转处理：进入错误状态并关闭执行机构
+static void Arm_OnStall(void)
+{
+    // 记录进入错误前所处的流程状态（仅记录有效工作状态）
+    if (arm_state != ARM_STATE_IDLE && arm_state != ARM_STATE_ERROR)
+    {
+        arm_state_before_error = arm_state;
+    }
+
+    // 关闭所有相关电机控制
+    __MOTOR_CTRL_DISABLE(&vel_catch_motor);
+    __MOTOR_CTRL_DISABLE(&pos_catch_motor);
+    __MOTOR_CTRL_DISABLE(&vel_raiseandlower_motor);
+    __MOTOR_CTRL_DISABLE(&pos_raiseandlower_motor);
+
+    // 标记机械臂错误状态，由控制线程决定后续如何恢复
+    arm_state = ARM_STATE_ERROR;
+}
+
 /* ====================== 机械臂控制流程函数实现 ====================== */
 static uint8_t Motor_Pos_Control(Motor_PosCtrl_t *pos_ctrl, DJI_t *motor,
                                  float target_angel, float tolerance,
                                  const char *motor_name)
 {
+    // 使能对应的位置环控制（统一在这里开启）
+    if (arm_state == ARM_STATE_ERROR)
+    {
+        return 0; // 错误状态下不再启动新动作
+    }
+    __MOTOR_CTRL_ENABLE(pos_ctrl);
+
     // 设置目标位置
     Motor_PosCtrl_SetRef(pos_ctrl, target_angel);
 
     while (1)
     {
+        // 若在执行过程中检测到错误状态（如堵转触发），立即退出
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
         // 获取电机当前角度
         float current_pos = Motor_GetAngle(motor->motor_type, motor);
 
@@ -451,7 +495,7 @@ static uint8_t Motor_Pos_Control(Motor_PosCtrl_t *pos_ctrl, DJI_t *motor,
 
         osDelay(10); // 10ms轮询一次
     }
-   return 1;
+    return 1;
 }
 
 /**
@@ -500,65 +544,181 @@ uint8_t Arm_Pick_Place_Process(void)
         return 0;
     }
 
-    // printf("===== 启动抓取-放置流程 =====\r\n");
-    arm_state = ARM_STATE_ROTATE_TO_PICK;
+    // 根据上一次错误前的状态决定从哪一个阶段重新开始
+    Arm_StateTypeDef start_state = ARM_STATE_ROTATE_TO_PICK;
+    if (arm_state_before_error > ARM_STATE_IDLE && arm_state_before_error < ARM_STATE_ERROR)
+    {
+        start_state = arm_state_before_error;
+    }
+    // 使用一次后清除，下次若正常完成则从头开始
+    arm_state_before_error = ARM_STATE_IDLE;
 
     // 步骤1：旋转到抓取位
-    Arm_Rotate(PICK_ROTATE_ANGLE);
-    arm_state = ARM_STATE_LIFT_TO_PICK;
-    osDelay(ACTION_DELAY_MS);
+    if (start_state <= ARM_STATE_ROTATE_TO_PICK)
+    {
+        arm_state = ARM_STATE_ROTATE_TO_PICK;
+        if (!Arm_Rotate(PICK_ROTATE_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
 
     // 步骤2：升降到抓取高度
-    Arm_Lift(PICK_LIFT_ANGLE);
-    arm_state = ARM_STATE_CATCH_CLOSE;
-    osDelay(ACTION_DELAY_MS);
+    if (start_state <= ARM_STATE_LIFT_TO_PICK)
+    {
+        arm_state = ARM_STATE_LIFT_TO_PICK;
+        if (!Arm_Lift(PICK_LIFT_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
 
-        // 步骤3：抓取电机推出（夹紧物体）
-        Arm_Catch(CATCH_CLOSE_ANGLE);
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
+
+    // 步骤3：抓取电机推出（夹紧物体）
+    if (start_state <= ARM_STATE_CATCH_CLOSE)
+    {
+        arm_state = ARM_STATE_CATCH_CLOSE;
+        if (!Arm_Catch(CATCH_CLOSE_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
 
         // 电磁阀夹紧之前先启动气泵
         Pump_SetPower(75);        // 气泵功率，可根据需要调整
         osDelay(100);             // 给气泵一点建立真空的时间
 
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+
         Pump_ValveOn();           // 电磁阀夹紧
         osDelay(ACTION_DELAY_MS);
 
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
+
     // 步骤4：抓取后抬升（使卷轴离开平台）
-    arm_state = ARM_STATE_LIFT_UP;
-    Arm_Lift(PLACE_LIFT_ANGLE + 0.3f);
-    osDelay(ACTION_DELAY_MS);
+    if (start_state <= ARM_STATE_LIFT_UP)
+    {
+        arm_state = ARM_STATE_LIFT_UP;
+        if (!Arm_Lift(PLACE_LIFT_ANGLE + 0.3f) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
 
     // 步骤5：旋转到放置位
-    arm_state = ARM_STATE_ROTATE_TO_PLACE;
-    Arm_Rotate(PLACE_ROTATE_ANGLE);
-    osDelay(ACTION_DELAY_MS);
+    if (start_state <= ARM_STATE_ROTATE_TO_PLACE)
+    {
+        arm_state = ARM_STATE_ROTATE_TO_PLACE;
+        if (!Arm_Rotate(PLACE_ROTATE_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
 
     // 步骤6：升降到放置高度
-    arm_state = ARM_STATE_LIFT_TO_PLACE;
-    Arm_Lift(PLACE_LIFT_ANGLE);
-    osDelay(ACTION_DELAY_MS);
+    if (start_state <= ARM_STATE_LIFT_TO_PLACE)
+    {
+        arm_state = ARM_STATE_LIFT_TO_PLACE;
+        if (!Arm_Lift(PLACE_LIFT_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
 
     // 步骤7：抓取电机推到指定角度（释放物体）
-    arm_state = ARM_STATE_CATCH_OPEN;
-    Arm_Catch(CATCH_OPEN_ANGLE);
+    if (start_state <= ARM_STATE_CATCH_OPEN)
+    {
+        arm_state = ARM_STATE_CATCH_OPEN;
+        if (!Arm_Catch(CATCH_OPEN_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
 
-    // 先打开电磁阀
-    Pump_ValveOff();
-    osDelay(100);             // 确保电磁阀已经完全打开
+        // 先打开电磁阀
+        Pump_ValveOff();
+        osDelay(100);             // 确保电磁阀已经完全打开，先放气
 
-    // 电磁阀打开之后再停止气泵
-    Pump_SetPower(0);
-    osDelay(ACTION_DELAY_MS);
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+
+        // 电磁阀打开之后再停止气泵
+        Pump_SetPower(0);
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
 
     // 步骤8：升降复位
-    arm_state = ARM_STATE_LIFT_RESET;
-    Arm_Lift(PICK_LIFT_ANGLE);
-    osDelay(ACTION_DELAY_MS);
+    if (start_state <= ARM_STATE_LIFT_RESET)
+    {
+        arm_state = ARM_STATE_LIFT_RESET;
+        if (!Arm_Lift(PICK_LIFT_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
 
     // 步骤9：旋转复位
-    arm_state = ARM_STATE_ROTATE_RESET;
-    Arm_Rotate(PICK_ROTATE_ANGLE);
-    osDelay(ACTION_DELAY_MS);
+    if (start_state <= ARM_STATE_ROTATE_RESET)
+    {
+        arm_state = ARM_STATE_ROTATE_RESET;
+        if (!Arm_Rotate(PICK_ROTATE_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
 
     // 流程完成，恢复空闲状态
     arm_state = ARM_STATE_IDLE;
@@ -577,27 +737,33 @@ void Arm_Control(void *argument)
           
     while (1) 
     {
-       
-        
-        /*switch (arm_state)
+        switch (arm_state)
         {
         case ARM_STATE_IDLE:
-            // 空闲状态：可通过外部触发调用 Arm_Pick_Place_Process()
-            osDelay(100);
+            // 空闲状态：等待上层触发流程（这里用按键 KEY0 作为示例触发源）
+            if (Key0_Pressed())
+            {
+                // 只有在确实空闲时才启动完整抓取-放置流程
+                Arm_Pick_Place_Process();
+            }
+            osDelay(50);
             break;
 
         case ARM_STATE_ERROR:
-            // 错误状态：输出告警，复位
-            // printf("机械臂错误状态，复位到空闲...\r\n");
-            RELEASE();
+            // 堵转或错误状态下的简单复位策略：确保执行机构关闭，然后回到空闲
+            __MOTOR_CTRL_DISABLE(&vel_catch_motor);
+            __MOTOR_CTRL_DISABLE(&pos_catch_motor);
+            __MOTOR_CTRL_DISABLE(&vel_raiseandlower_motor);
+            __MOTOR_CTRL_DISABLE(&pos_raiseandlower_motor);
             arm_state = ARM_STATE_IDLE;
+            osDelay(100);
             break;
 
         default:
-            // 流程执行中，无需额外处理
+            // 正在执行动作，由流程函数驱动
             osDelay(10);
             break;
-        }*/ 
+        }
     }
     //osThreadExit();
 }
@@ -607,6 +773,97 @@ void motor_stop(void)
     if(fabsf(catch_motor.velocity) < 10.0f&&fabsf(catch_motor.iq_cmd)>1500)
     {
         Motor_VelCtrl_SetRef(&vel_catch_motor, 0.0f);
+    }
+}
+
+// 堵转监视任务：在机械臂处于工作状态时监视电机是否堵转
+void Arm_StallMonitor(void *argument)
+{
+    uint32_t catch_stall_start = 0;
+    uint8_t  catch_stall_active = 0;
+    uint32_t lift_stall_start  = 0;
+    uint8_t  lift_stall_active  = 0;
+    uint32_t rotate_stall_start = 0;
+    uint8_t  rotate_stall_active = 0;
+
+    for (;;)
+    {
+        // 仅在机械臂非空闲状态时进行堵转检测
+        if (arm_state != ARM_STATE_IDLE && arm_state != ARM_STATE_ERROR)
+        {
+            uint32_t now = HAL_GetTick();
+
+            // 抓取电机堵转判定（使用电机当前速度和电流指令）
+            float catch_vel = catch_motor.velocity;
+            float catch_iq  = catch_motor.iq_cmd;
+            uint8_t catch_cond = (fabsf(catch_iq) > STALL_OUT_TH_CATCH) &&
+                                 (fabsf(catch_vel) < STALL_VEL_TH_CATCH);
+
+            if (catch_cond)
+            {
+                if (!catch_stall_active)
+                {
+                    catch_stall_active = 1;
+                    catch_stall_start  = now;
+                }
+                else if ((now - catch_stall_start) >= STALL_CONFIRM_MS)
+                {
+                    Arm_OnStall();
+                }
+            }
+            else
+            {
+                catch_stall_active = 0;
+            }
+
+            // 升降电机堵转判定（使用速度环控制输出和实际速度）
+            float lift_vel  = raiseandlower_motor.velocity;
+            float lift_out  = vel_raiseandlower_motor.pid.output;
+            uint8_t lift_cond = (fabsf(lift_out) > STALL_OUT_TH_LIFT) &&
+                                (fabsf(lift_vel) < STALL_VEL_TH_LIFT);
+
+            if (lift_cond)
+            {
+                if (!lift_stall_active)
+                {
+                    lift_stall_active = 1;
+                    lift_stall_start  = now;
+                }
+                else if ((now - lift_stall_start) >= STALL_CONFIRM_MS)
+                {
+                    Arm_OnStall();
+                }
+            }
+            else
+            {
+                lift_stall_active = 0;
+            }
+
+            // 旋转电机堵转判定（使用速度环控制输出和实际速度）
+            float rotate_vel  = rotate_motor.velocity;
+            float rotate_out  = vel_rotate_motor.pid.output;
+            uint8_t rotate_cond = (fabsf(rotate_out) > STALL_OUT_TH_ROTATE) &&
+                                  (fabsf(rotate_vel) < STALL_VEL_TH_ROTATE);
+
+            if (rotate_cond)
+            {
+                if (!rotate_stall_active)
+                {
+                    rotate_stall_active = 1;
+                    rotate_stall_start  = now;
+                }
+                else if ((now - rotate_stall_start) >= STALL_CONFIRM_MS)
+                {
+                    Arm_OnStall();
+                }
+            }
+            else
+            {
+                rotate_stall_active = 0;
+            }
+        }
+
+        osDelay(5); // 5ms 轮询一次
     }
 }
 
