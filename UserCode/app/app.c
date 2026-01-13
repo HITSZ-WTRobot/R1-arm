@@ -7,14 +7,7 @@
  */
 #include "app.h"
 #include "math.h"
-// 电磁阀控制引脚定义
-#define SOLENOID_VALVE_GPIO_PORT GPIOE
-#define SOLENOID_VALVE_GPIO_PIN GPIO_PIN_8
-
-// 电磁阀控制宏
-#define SOLENOID_VALVE_GPIO_PORT GPIOA
-#define SOLENOID_VALVE_GPIO_PIN GPIO_PIN_0
-
+#include "drivers/pump_ctrl.h"   // 气泵与电磁阀控制库
 // 控制参数配置
 #define ROTATE_TOLERANCE 0.05f // 旋转角度误差 (度)
 #define LIFT_TOLERANCE 0.02f   // 升降角度误差 (度)
@@ -214,8 +207,8 @@ void TIM_Callback(TIM_HandleTypeDef *htim)
      *
      * IQ_CMD_GROUP_1_4 和 IQ_CMD_GROUP_5_8 代表发送的电调 ID 组
      */
-    DJI_SendSetIqCommand(&hcan1, IQ_CMD_GROUP_1_4);
-    DJI_SendSetIqCommand(&hcan1, IQ_CMD_GROUP_5_8);
+    DJI_SendSetIqCommand(&hcan2, IQ_CMD_GROUP_1_4);
+    DJI_SendSetIqCommand(&hcan2, IQ_CMD_GROUP_5_8);
     //motor_stop();
 }
 void DJI_Control_Init()
@@ -227,7 +220,7 @@ void DJI_Control_Init()
      * 默认使用一个过滤器 + 掩码模式
      * 亦可以使用其他过滤器模式，处理函数与使用什么过滤器无关，只要保证数据能被接收到即可
      */
-    DJI_CAN_FilterInit(&hcan1, 0);
+    DJI_CAN_FilterInit(&hcan2, 0);
     /**
      * Step1: 注册 DJI CAN 处理回调
      *
@@ -236,15 +229,15 @@ void DJI_Control_Init()
      *
      * 一般情况下我们只使用 Fifo0，因为 Fifo0 的优先度比 Fifo1 高，当然也可以两个都使用
      */
-    HAL_CAN_RegisterCallback(&hcan1, HAL_CAN_RX_FIFO0_MSG_PENDING_CB_ID, DJI_CAN_Fifo0ReceiveCallback);
-    // HAL_CAN_RegisterCallback(&hcan1, HAL_CAN_RX_FIFO1_MSG_PENDING_CB_ID, DJI_CAN_Fifo1ReceiveCallback);
+    HAL_CAN_RegisterCallback(&hcan2, HAL_CAN_RX_FIFO0_MSG_PENDING_CB_ID, DJI_CAN_Fifo0ReceiveCallback);
+    // HAL_CAN_RegisterCallback(&hcan2, HAL_CAN_RX_FIFO1_MSG_PENDING_CB_ID, DJI_CAN_Fifo1ReceiveCallback);
 
     /* Step2: 启动 CAN
      *
      * CAN 必须在注册回调后再启用，否则回调无法正常注册，同样地，我们一般也只使用 Fifo0，亦可以两个都开
      */
-    CAN_Start(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING);
-    // CAN_Start(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING);
+    CAN_Start(&hcan2, CAN_IT_RX_FIFO0_MSG_PENDING);
+    // CAN_Start(&hcan2, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING);
 
     /**
      * Step3: 初始化电机
@@ -257,19 +250,19 @@ void DJI_Control_Init()
      */
     /*DJI_Init(&rotate_motor, &(DJI_Config_t){
                                 .auto_zero = false,       //< 是否在启动时自动清零角度
-                                .hcan = &hcan1,           //< 电机挂载在的 CAN 句柄
+                                .hcan = &hcan2,           //< 电机挂载在的 CAN 句柄
                                 .motor_type = M2006_C610, //< 电机类型
                                 .id1 = 3,                 //< 电调 ID (1~8)
                             });*/
     DJI_Init(&raiseandlower_motor, &(DJI_Config_t){
                                        .auto_zero = false,       //< 是否在启动时自动清零角度
-                                       .hcan = &hcan1,           //< 电机挂载在的 CAN 句柄
+                                       .hcan = &hcan2,           //< 电机挂载在的 CAN 句柄
                                        .motor_type = M3508_C620, //< 电机类型
                                        .id1 = 4,                //< 电调 ID (1~8)
                                    });
     DJI_Init(&catch_motor, &(DJI_Config_t){
                                .auto_zero = false,       //< 是否在启动时自动清零角度
-                               .hcan = &hcan1,           //< 电机挂载在的 CAN 句柄
+                               .hcan = &hcan2,           //< 电机挂载在的 CAN 句柄
                                .motor_type = M2006_C610, //< 电机类型
                                .id1 = 6,                //< 电调 ID (1~8)
                            });
@@ -390,8 +383,8 @@ void DJI_Control_Init()
      * 需要在 STM32CubeMX -> `Project Manager` -> `Advanced Settings`
      *  -> `Register Callback` 中启用 TIM 回调
      */
-    HAL_TIM_RegisterCallback(&htim6, HAL_TIM_PERIOD_ELAPSED_CB_ID, TIM_Callback);
-    HAL_TIM_Base_Start_IT(&htim6);
+    HAL_TIM_RegisterCallback(&htim3, HAL_TIM_PERIOD_ELAPSED_CB_ID, TIM_Callback);
+    HAL_TIM_Base_Start_IT(&htim3);
 }
 /**
  * 定时器回调函数，用于定时进行 PID 计算和 CAN 指令发送
@@ -520,10 +513,15 @@ uint8_t Arm_Pick_Place_Process(void)
     arm_state = ARM_STATE_CATCH_CLOSE;
     osDelay(ACTION_DELAY_MS);
 
-    // 步骤3：抓取电机推出（夹紧物体）
-    Arm_Catch(CATCH_CLOSE_ANGLE);
-         // 电磁阀夹紧
-    osDelay(ACTION_DELAY_MS);
+        // 步骤3：抓取电机推出（夹紧物体）
+        Arm_Catch(CATCH_CLOSE_ANGLE);
+
+        // 电磁阀夹紧之前先启动气泵
+        Pump_SetPower(75);        // 气泵功率，可根据需要调整
+        osDelay(100);             // 给气泵一点建立真空的时间
+
+        Pump_ValveOn();           // 电磁阀夹紧
+        osDelay(ACTION_DELAY_MS);
 
     // 步骤4：抓取后抬升（使卷轴离开平台）
     arm_state = ARM_STATE_LIFT_UP;
@@ -543,7 +541,13 @@ uint8_t Arm_Pick_Place_Process(void)
     // 步骤7：抓取电机推到指定角度（释放物体）
     arm_state = ARM_STATE_CATCH_OPEN;
     Arm_Catch(CATCH_OPEN_ANGLE);
-    // 电磁阀释放
+
+    // 先打开电磁阀
+    Pump_ValveOff();
+    osDelay(100);             // 确保电磁阀已经完全打开
+
+    // 电磁阀打开之后再停止气泵
+    Pump_SetPower(0);
     osDelay(ACTION_DELAY_MS);
 
     // 步骤8：升降复位

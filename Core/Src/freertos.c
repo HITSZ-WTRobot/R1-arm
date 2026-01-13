@@ -59,6 +59,10 @@ const osThreadAttr_t defaultTask_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
+// 来自 Usercode/app/app.c 的机械臂任务函数声明
+extern void Arm_Init(void *argument);
+extern void Arm_Control(void *argument);
+
 //机械臂初始化任务声明
 /* Definitions for arm_init */
 osThreadId_t arm_initHandle;
@@ -122,7 +126,7 @@ void MX_FREERTOS_Init(void) {
 
   //创建机械臂控制任务
   /* creation of arm_control */
-  arm_controlHandle = osThreadNew(Arm_control, NULL, &arm_control_attributes);
+  arm_controlHandle = osThreadNew(Arm_Control, NULL, &arm_control_attributes);
 
   /* USER CODE END RTOS_THREADS */
 

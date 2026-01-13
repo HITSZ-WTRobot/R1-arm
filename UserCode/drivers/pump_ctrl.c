@@ -1,5 +1,4 @@
 #include "pump_ctrl.h"
-#include "gpio.h"
 
 void Pump_SetPower(uint8_t power)
 {
@@ -10,5 +9,14 @@ void Pump_SetPower(uint8_t power)
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pulse);
 }
 
+void Pump_ValveOn(void)
+{
+    HAL_GPIO_WritePin(SOLENOID_VALVE_GPIO_PORT, SOLENOID_VALVE_GPIO_PIN, GPIO_PIN_SET);
+}
+
+void Pump_ValveOff(void)
+{
+    HAL_GPIO_WritePin(SOLENOID_VALVE_GPIO_PORT, SOLENOID_VALVE_GPIO_PIN, GPIO_PIN_RESET);
+}
 
 
