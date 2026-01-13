@@ -23,7 +23,6 @@
 #include "main.h"
 #include "cmsis_os.h"
 #include "tim.h"
-#include "pump_ctrl.h"
 #include "app.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -60,15 +59,6 @@ const osThreadAttr_t defaultTask_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-// 添加气泵PWM任务相关声明
-void PumpPWMTask(void *argument);
-osThreadId_t PumpPWMTaskHandle;
-const osThreadAttr_t PumpPWMTask_attributes = {
-  .name = "PumpPWMTask",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
-
 //机械臂初始化任务声明
 /* Definitions for arm_init */
 osThreadId_t arm_initHandle;
@@ -125,9 +115,6 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
-
-  //创建气泵PWM任务
-  PumpPWMTaskHandle = osThreadNew(PumpPWMTask, NULL, &PumpPWMTask_attributes);
   
   //创建机械臂初始化任务
   /* creation of arm_init */
@@ -165,27 +152,5 @@ void StartDefaultTask(void *argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
-void PumpPWMTask(void *argument)
-{
-  /* USER CODE BEGIN PumpPWMTask */
-  // 启动 TIM3 通道1 PWM 输出
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
-  /* Infinite loop */
-  for(;;)
-  {
-    // 示例：设置气泵功率为75%
-    Pump_SetPower(75);
-    // 打开电磁阀
-    Pump_ValveOn();
-    osDelay(2000); // 运行5秒
-
-    // 设置气泵功率为0（关闭）
-    Pump_SetPower(0);
-    // 关闭电磁阀
-    Pump_ValveOff();
-    osDelay(2000); // 停止5秒
-  }
-  /* USER CODE END PumpPWMTask */
-}
 /* USER CODE END Application */
 

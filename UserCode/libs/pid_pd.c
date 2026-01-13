@@ -1,8 +1,9 @@
 /**
- * @file    gpio_driver.h
+ * @file    pid_pd.c
  * @author  syhanjin
- * @date    2025-09-10
- * @brief   gpio driver
+ * @date    2025-11-08
+ *
+ * Detailed description (optional).
  *
  * --------------------------------------------------------------------------
  * This program is free software: you can redistribute it and/or modify
@@ -18,45 +19,39 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
- * Project repository: https://github.com/HITSZ-WTR2026/bsp_drivers
+ * Project repository: https://github.com/HITSZ-WTRobot/chassises_controller
  */
-#ifndef GPIO_DRIVER_H
-#define GPIO_DRIVER_H
-#include "main.h"
+#include "pid_pd.h"
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
 
-typedef struct
+void PD_Calculate(PD_t* pd)
 {
-    GPIO_TypeDef* port;
-    uint16_t      pin;
-} GPIO_t;
+    pd->cur_error = pd->ref - pd->fdb;
+    pd->output    = pd->Kp * pd->cur_error + pd->Kd * (pd->cur_error - pd->prev_error);
+    if (pd->output > pd->abs_output_max)
+        pd->output = pd->abs_output_max;
+    if (pd->output < -pd->abs_output_max)
+        pd->output = -pd->abs_output_max;
 
-static inline void GPIO_WritePin(GPIO_t* hgpio, const GPIO_PinState PinState)
-{
-    HAL_GPIO_WritePin(hgpio->port, hgpio->pin, PinState);
+    pd->prev_error = pd->cur_error;
 }
 
-static inline void GPIO_SetPin(GPIO_t* hgpio)
+void PD_Init(PD_t* pd, const PD_Config_t* config)
 {
-    GPIO_WritePin(hgpio, GPIO_PIN_SET);
-}
+    /* reset pd */
+    memset(pd, 0, sizeof(PD_t));
 
-static inline void GPIO_ResetPin(GPIO_t* hgpio)
-{
-    GPIO_WritePin(hgpio, GPIO_PIN_RESET);
-}
-
-static inline void GPIO_TogglePin(GPIO_t* hgpio)
-{
-    HAL_GPIO_TogglePin(hgpio->port, hgpio->pin);
+    /* set pd arguments */
+    pd->Kp             = config->Kp;
+    pd->Kd             = config->Kd;
+    pd->abs_output_max = config->abs_output_max;
 }
 
 #ifdef __cplusplus
 }
 #endif
-
-#endif // GPIO_DRIVER_H

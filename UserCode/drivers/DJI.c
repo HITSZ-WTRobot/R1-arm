@@ -2,13 +2,47 @@
  * @file    DJI.c
  * @author  syhanjin
  * @date    2025-09-03
+ *
+ * Detailed description (optional).
+ *
+ * --------------------------------------------------------------------------
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * Project repository: https://github.com/HITSZ-WTR2026/motor_drivers
  */
 #include "DJI.h"
 #include <string.h>
 #include "bsp/can_driver.h"
 
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+static void DJI_Feed(DJI_t* dji)
+{
+    dji->feedback_snacks = 10;
+}
+
+static void DJI_Eat(DJI_t* dji)
+{
+    if (dji->feedback_snacks > 0)
+        dji->feedback_snacks--;
+}
+
 static DJI_FeedbackMap map[CAN_NUM];
-static size_t map_size = 0;
+static size_t          map_size = 0;
 
 /**
  * 电机减速比 map
@@ -34,14 +68,22 @@ static inline DJI_t* getDJIHandle(DJI_t* motors[8], const CAN_RxHeaderTypeDef* h
     return motors[id0];
 }
 
-void DJI_Init(DJI_t* hdji, const DJI_Config_t dji_config)
+void DJI_Init(DJI_t* hdji, const DJI_Config_t* dji_config)
 {
     memset(hdji, 0, sizeof(DJI_t));
 
-    hdji->enable    = true;
-    hdji->auto_zero = dji_config.auto_zero;
-    hdji->can       = dji_config.hcan->Instance;
-    hdji->id1       = dji_config.id1;
+    hdji->enable             = true;
+    hdji->reverse            = dji_config->reverse;
+    hdji->auto_zero          = dji_config->auto_zero;
+    hdji->can                = dji_config->hcan->Instance;
+    hdji->id1                = dji_config->id1;
+    hdji->motor_type         = dji_config->motor_type;
+    hdji->inv_reduction_rate = 1.0f / // 取倒数将除法转为乘法加快运算速度
+                               ((dji_config->reduction_rate > 0 ? dji_config->reduction_rate
+                                                                : 1.0f)        // 外接减速比
+                                * reduction_rate_map[dji_config->motor_type]); // 电机内部减速比
+
+    hdji->feedback_snacks = 0;
 
     /* 注册回调 */
     DJI_t** mapped_motors = NULL;
@@ -51,9 +93,8 @@ void DJI_Init(DJI_t* hdji, const DJI_Config_t dji_config)
     if (mapped_motors == NULL)
     {
         // CAN 未被注册，添加到 map
-        map[map_size] = (DJI_FeedbackMap){
-            .can    = hdji->can,
-            .motors = {NULL} // 为了好看
+        map[map_size] = (DJI_FeedbackMap) {
+            .can = hdji->can, .motors = { NULL } // 为了好看
         };
         mapped_motors = map[map_size].motors;
         map_size++;
@@ -76,8 +117,11 @@ void DJI_Init(DJI_t* hdji, const DJI_Config_t dji_config)
  */
 void DJI_DataDecode(DJI_t* hdji, const uint8_t data[8])
 {
-    const float feedback_angle = (float)((uint16_t)data[0] << 8 | data[1]) * 360.0f / 8192.0f;
-    const float feedback_rpm   = (int16_t)((uint16_t)data[2] << 8 | data[3]);
+    // 喂狗
+    DJI_Feed(hdji);
+
+    const float feedback_angle = (float) ((uint16_t) data[0] << 8 | data[1]) * 360.0f / 8192.0f;
+    const float feedback_rpm   = (int16_t) ((uint16_t) data[2] << 8 | data[3]);
     // TODO: 堵转电流检测
     // const float feedback_current = (float)((int16_t)data[4] << 8 | data[5]) / 16384.0f * 20.0f;
 
@@ -87,13 +131,15 @@ void DJI_DataDecode(DJI_t* hdji, const uint8_t data[8])
     if (feedback_angle > 270 && hdji->feedback.mech_angle < 90)
         hdji->feedback.round_cnt--;
 
-    // 为什么不能用 rust 的 match
-    const float reduction_rate = reduction_rate_map[hdji->motor_type];
-    hdji->feedback.mech_angle  = feedback_angle;
-    hdji->abs_angle            = ((float)hdji->feedback.round_cnt * 360.0f + hdji->feedback.mech_angle - hdji->angle_zero) / reduction_rate;
+    hdji->feedback.mech_angle = feedback_angle;
+    hdji->abs_angle           = (hdji->reverse ? -1.0f : 1.0f) * // 反转时需要反转角度输入
+                      ((float) hdji->feedback.round_cnt * 360.0f + hdji->feedback.mech_angle -
+                       hdji->angle_zero) *
+                      hdji->inv_reduction_rate;
 
     hdji->feedback.rpm = feedback_rpm;
-    hdji->velocity     = hdji->feedback.rpm / reduction_rate;
+    hdji->velocity     = (hdji->reverse ? -1.0f : 1.0f) * // 反转时需要反转速度输入
+                     hdji->feedback.rpm * hdji->inv_reduction_rate;
 
     hdji->feedback_count++;
     if (hdji->feedback_count == 50 && hdji->auto_zero)
@@ -101,7 +147,6 @@ void DJI_DataDecode(DJI_t* hdji, const uint8_t data[8])
         // 上电后第 50 次反馈执行输出轴清零操作
         DJI_ResetAngle(hdji);
     }
-    
 }
 
 /**
@@ -129,18 +174,23 @@ void DJI_SendSetIqCommand(CAN_HandleTypeDef* hcan, const DJI_IqSetCmdGroup_t cmd
             uint8_t iq_data[8] = {};
             for (int j = 0; j < 4; j++)
             {
-                if (map[i].motors[j + cmd_group] != NULL)
+                DJI_t* hdji = map[i].motors[j + cmd_group];
+                if (hdji != NULL)
                 {
-                    iq_data[1 + j * 2] = (uint8_t)(map[i].motors[j + cmd_group]->iq_cmd & 0xFF);      // 电流值低 8 位
-                    iq_data[0 + j * 2] = (uint8_t)(map[i].motors[j + cmd_group]->iq_cmd >> 8 & 0xFF); // 电流值高 8 位
+                    // 吃小零食
+                    DJI_Eat(hdji);
+
+                    const int32_t iq_cmd = hdji->reverse ? -hdji->iq_cmd : hdji->iq_cmd;
+                    iq_data[1 + j * 2]   = (uint8_t) (iq_cmd & 0xFF);      // 电流值低 8 位
+                    iq_data[0 + j * 2]   = (uint8_t) (iq_cmd >> 8 & 0xFF); // 电流值高 8 位
                 }
             }
             CAN_SendMessage(hcan,
-                            (CAN_TxHeaderTypeDef){          // 此处修改&(CAN_TxHeaderTypeDef)，删去&
-                                .StdId = cmd_group == IQ_CMD_GROUP_1_4 ? 0x200 : 0x1FF,
-                                .IDE   = CAN_ID_STD,
-                                .RTR   = CAN_RTR_DATA,
-                                .DLC   = 8},
+                            &(CAN_TxHeaderTypeDef) { .StdId = cmd_group == IQ_CMD_GROUP_1_4 ? 0x200
+                                                                                            : 0x1FF,
+                                                     .IDE   = CAN_ID_STD,
+                                                     .RTR   = CAN_RTR_DATA,
+                                                     .DLC   = 8 },
                             iq_data);
             return;
         }
@@ -149,17 +199,17 @@ void DJI_SendSetIqCommand(CAN_HandleTypeDef* hcan, const DJI_IqSetCmdGroup_t cmd
 
 void DJI_CAN_FilterInit(CAN_HandleTypeDef* hcan, const uint32_t filter_bank)
 {
-    const CAN_FilterTypeDef sFilterConfig = {
-        .FilterIdHigh         = 0x200 << 5,
-        .FilterIdLow          = 0x0000,
-        .FilterMaskIdHigh     = 0x7F0 << 5, //< 高 7 位匹配，第 4 位忽略
-        .FilterMaskIdLow      = 0x0000,
-        .FilterFIFOAssignment = CAN_FILTER_FIFO0,
-        .FilterBank           = filter_bank,
-        .FilterMode           = CAN_FILTERMODE_IDMASK,
-        .FilterScale          = CAN_FILTERSCALE_32BIT,
-        .FilterActivation     = ENABLE,
-        .SlaveStartFilterBank = 14};
+    const CAN_FilterTypeDef sFilterConfig = { .FilterIdHigh     = 0x200 << 5,
+                                              .FilterIdLow      = 0x0000,
+                                              .FilterMaskIdHigh = 0x7F0 << 5, //< 高 7 位匹配，第 4
+                                                                              // 位忽略
+                                              .FilterMaskIdLow      = 0x0000,
+                                              .FilterFIFOAssignment = CAN_FILTER_FIFO0,
+                                              .FilterBank           = filter_bank,
+                                              .FilterMode           = CAN_FILTERMODE_IDMASK,
+                                              .FilterScale          = CAN_FILTERSCALE_32BIT,
+                                              .FilterActivation     = ENABLE,
+                                              .SlaveStartFilterBank = 14 };
     if (HAL_CAN_ConfigFilter(hcan, &sFilterConfig) != HAL_OK)
     {
         DJI_ERROR_HANDLER();
@@ -168,13 +218,16 @@ void DJI_CAN_FilterInit(CAN_HandleTypeDef* hcan, const uint32_t filter_bank)
 
 /**
  * CAN FIFO0 接收回调函数
- * 可在 HAL_CAN_RxFifo0MsgPendingCallback 中直接调用此函数
+ * @attention 必须*注册*回调函数或者在更高级的回调函数内调用此回调函数
+ * @note 使用
+ *          HAL_CAN_RegisterCallback(hcan, HAL_CAN_RX_FIFO0_MSG_PENDING_CB_ID,
+ * DJI_CAN_Fifo0ReceiveCallback); 来注册回调函数
  * @param hcan
  */
 void DJI_CAN_Fifo0ReceiveCallback(CAN_HandleTypeDef* hcan)
 {
     CAN_RxHeaderTypeDef header;
-    uint8_t data[8];
+    uint8_t             data[8];
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &header, data) != HAL_OK)
     {
         DJI_ERROR_HANDLER();
@@ -190,9 +243,8 @@ void DJI_CAN_Fifo0ReceiveCallback(CAN_HandleTypeDef* hcan)
  */
 void DJI_CAN_Fifo1ReceiveCallback(CAN_HandleTypeDef* hcan)
 {
-
     CAN_RxHeaderTypeDef header;
-    uint8_t data[8];
+    uint8_t             data[8];
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO1, &header, data) != HAL_OK)
     {
         DJI_ERROR_HANDLER();
@@ -204,8 +256,12 @@ void DJI_CAN_Fifo1ReceiveCallback(CAN_HandleTypeDef* hcan)
 /**
  * CAN 基本接收回调函数
  * @param hcan
+ * @param header
+ * @param data
  */
-void DJI_CAN_BaseReceiveCallback(CAN_HandleTypeDef* hcan, CAN_RxHeaderTypeDef* header, uint8_t data[])
+void DJI_CAN_BaseReceiveCallback(const CAN_HandleTypeDef*   hcan,
+                                 const CAN_RxHeaderTypeDef* header,
+                                 const uint8_t              data[])
 {
     for (int i = 0; i < map_size; i++)
     {
@@ -218,3 +274,7 @@ void DJI_CAN_BaseReceiveCallback(CAN_HandleTypeDef* hcan, CAN_RxHeaderTypeDef* h
         }
     }
 }
+
+#ifdef __cplusplus
+}
+#endif
