@@ -105,6 +105,7 @@ int main(void)
   MX_USART2_UART_Init();
   MX_USART3_UART_Init();
   MX_USART6_UART_Init();
+  MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -195,7 +196,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   {
     HAL_IncTick();
   }
-
   /* USER CODE BEGIN Callback 1 */
   /* 调用机械臂控制定时回调（使用 TIM3 作为控制周期定时器） */
   if (htim->Instance == TIM3)
