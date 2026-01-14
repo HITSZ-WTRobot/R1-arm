@@ -73,15 +73,6 @@ void Error_Handler(void);
 #define LED2_GPIO_Port GPIOE
 #define LED3_Pin GPIO_PIN_10
 #define LED3_GPIO_Port GPIOE
-#define KEY0_Pin GPIO_PIN_13
-#define KEY0_GPIO_Port GPIOE
-#define KEY0_EXTI_IRQn EXTI15_10_IRQn
-#define KEY1_Pin GPIO_PIN_14
-#define KEY1_GPIO_Port GPIOE
-#define KEY1_EXTI_IRQn EXTI15_10_IRQn
-#define KEY2_Pin GPIO_PIN_15
-#define KEY2_GPIO_Port GPIOE
-#define KEY2_EXTI_IRQn EXTI15_10_IRQn
 #define DE_Pin GPIO_PIN_0
 #define DE_GPIO_Port GPIOD
 #define RE_Pin GPIO_PIN_1
