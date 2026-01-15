@@ -6,77 +6,93 @@
  * @date    2025-12-09
  */
 #include "app.h"
+#include "drivers/pump_ctrl.h" // 气泵与电磁阀控制库
 #include "math.h"
+// 控制参数配置
+#define ROTATE_TOLERANCE 0.05f // 旋转角度误差 (度)
+#define LIFT_TOLERANCE 0.02f   // 升降角度误差 (度)
+#define CATCH_TOLERANCE 0.03f  // 抓取角度误差 (度)
+#define ACTION_DELAY_MS 5000   // 动作稳定延时
 
-// 电磁阀控制引脚定义
-#define SOLENOID_VALVE_GPIO_PORT GPIOE
-#define SOLENOID_VALVE_GPIO_PIN GPIO_PIN_8
+// 堵转检测参数（可根据实际调节）
+#define STALL_VEL_TH_CATCH 10.0f    // 抓取电机判定为几乎不转的速度阈值
+#define STALL_OUT_TH_CATCH 1500.0f  // 抓取电机判定为“用力很大”的电流/输出阈值
+#define STALL_VEL_TH_LIFT 5.0f      // 升降电机速度阈值
+#define STALL_OUT_TH_LIFT 3000.0f   // 升降电机输出阈值
+#define STALL_VEL_TH_ROTATE 5.0f    // 旋转电机速度阈值
+#define STALL_OUT_TH_ROTATE 2000.0f // 旋转电机输出阈值
+#define STALL_CONFIRM_MS 200u       // 堵转状态持续多久判定为真正堵转
 
-// 电磁阀控制宏（注：此处与上方定义重复，建议确认实际使用的引脚）
-#define SOLENOID_VALVE_GPIO_PORT GPIOA
-#define SOLENOID_VALVE_GPIO_PIN GPIO_PIN_0
+// 机械臂关键位置参数、
+#define PICK_ROTATE_ANGLE 0.0f   // 抓取位旋转角度
+#define PLACE_ROTATE_ANGLE 90.0f // 放置位旋转角度
+#define PICK_LIFT_ANGLE 1.2f     // 抓取位升降角度
+#define PLACE_LIFT_ANGLE 0.5f    // 放置位升降角度
+#define CATCH_CLOSE_ANGLE 1.8f   // 抓取结构推出时电机旋转角度
+#define CATCH_OPEN_ANGLE 0.0f    // 抓取结构收回时电机复位角
+// 机械臂状态
 
-// 按键定义
-#define ARM_CATCH_KEY_GPIO_PORT GPIOE
-#define ARM_CATCH_KEY_GPIO_PIN GPIO_PIN_13
-#define ARM_ROTATE_KEY_GPIO_PORT GPIOE
-#define ARM_ROTATE_KEY_GPIO_PIN GPIO_PIN_14
-#define ARM_RAISEANDLOWER_KEY_GPIO_PORT GPIOE
-#define ARM_RAISEANDLOWER_KEY_GPIO_PIN GPIO_PIN_15
+typedef enum
+{
+    ARM_STATE_IDLE,            // 空闲
+    ARM_STATE_ROTATE_TO_PICK,  // 旋转到抓取位
+    ARM_STATE_LIFT_TO_PICK,    // 升降到抓取位
+    ARM_STATE_CATCH_CLOSE,     // 抓取闭合
+    ARM_STATE_LIFT_UP,         // 抓取后抬升
+    ARM_STATE_ROTATE_TO_PLACE, // 旋转到放置位
+    ARM_STATE_LIFT_TO_PLACE,   // 升降到放置位
+    ARM_STATE_CATCH_OPEN,      // 抓取张开
+    ARM_STATE_LIFT_RESET,      // 升降复位
+    ARM_STATE_ROTATE_RESET,    // 旋转复位
+    ARM_STATE_ERROR            // 错误
+} Arm_StateTypeDef;
+Arm_StateTypeDef arm_state = ARM_STATE_IDLE;
 
-// 机械臂关键位置参数
-#define ARM_RESET_ANGLE 0.0f    // 机械臂初始位置角度
-#define ARM_ROTATE_SPEED 60.0f   // 抓取位旋转速度
-#define ARM_CATCH_PUSH_ANGLE 50.0f   // 抓取结构推出时电机旋转角度
-#define ARM_RAISEANDLOWER_HEIGHT_LOW 200.0f  // 机械臂升降低位高度
-#define ARM_RAISEANDLOWER_HEIGHT_MIDDLE 800.0f // 机械臂升降中位高度
-#define ARM_RAISEANDLOWER_HEIGHT_HIGH 1400.0f  // 机械臂升降高位高度
+// 记录进入错误状态之前的流程阶段，用于下次重试从该阶段开始
+static Arm_StateTypeDef arm_state_before_error = ARM_STATE_IDLE;
 
-// 按键扫描相关代码
 #define KEY_PRESSED_LEVEL GPIO_PIN_RESET
 #define KEY_DEBOUNCE_MS 50u
 
 static uint8_t Key_ScanPressedEvent(GPIO_TypeDef *port, uint16_t pin)
 {
-    // 替换为宏对应的静态变量命名，增强可读性
-    static GPIO_PinState stable_catch = GPIO_PIN_SET, last_catch = GPIO_PIN_SET;
-    static uint32_t tchg_catch = 0;
-    static uint8_t latched_catch = 0;
+    static GPIO_PinState stable13 = GPIO_PIN_SET, last13 = GPIO_PIN_SET;
+    static uint32_t tchg13 = 0;
+    static uint8_t latched13 = 0;
 
-    static GPIO_PinState stable_rotate = GPIO_PIN_SET, last_rotate = GPIO_PIN_SET;
-    static uint32_t tchg_rotate = 0;
-    static uint8_t latched_rotate = 0;
+    static GPIO_PinState stable14 = GPIO_PIN_SET, last14 = GPIO_PIN_SET;
+    static uint32_t tchg14 = 0;
+    static uint8_t latched14 = 0;
 
-    static GPIO_PinState stable_raiseandlower = GPIO_PIN_SET, last_raiseandlower = GPIO_PIN_SET;
-    static uint32_t tchg_raiseandlower = 0;
-    static uint8_t latched_raiseandlower = 0;
+    static GPIO_PinState stable15 = GPIO_PIN_SET, last15 = GPIO_PIN_SET;
+    static uint32_t tchg15 = 0;
+    static uint8_t latched15 = 0;
 
     GPIO_PinState *stable;
     GPIO_PinState *last;
     uint32_t *tchg;
     uint8_t *latched;
 
-    // 使用按键宏进行判断，替换硬编码的引脚值
-    if (pin == ARM_CATCH_KEY_GPIO_PIN)
+    if (pin == GPIO_PIN_13)
     {
-        stable = &stable_catch;
-        last = &last_catch;
-        tchg = &tchg_catch;
-        latched = &latched_catch;
+        stable = &stable13;
+        last = &last13;
+        tchg = &tchg13;
+        latched = &latched13;
     }
-    else if (pin == ARM_ROTATE_KEY_GPIO_PIN)
+    else if (pin == GPIO_PIN_14)
     {
-        stable = &stable_rotate;
-        last = &last_rotate;
-        tchg = &tchg_rotate;
-        latched = &latched_rotate;
+        stable = &stable14;
+        last = &last14;
+        tchg = &tchg14;
+        latched = &latched14;
     }
-    else if (pin == ARM_RAISEANDLOWER_KEY_GPIO_PIN)
+    else if (pin == GPIO_PIN_15)
     {
-        stable = &stable_raiseandlower;
-        last = &last_raiseandlower;
-        tchg = &tchg_raiseandlower;
-        latched = &latched_raiseandlower;
+        stable = &stable15;
+        last = &last15;
+        tchg = &tchg15;
+        latched = &latched15;
     }
     else
     {
@@ -114,44 +130,37 @@ static uint8_t Key_ScanPressedEvent(GPIO_TypeDef *port, uint16_t pin)
     return 0;
 }
 
-static uint8_t Key_GetState(GPIO_TypeDef *port, uint16_t pin)
+// 测试按钮
+static inline uint8_t Key0_Pressed(void)
 {
-    GPIO_PinState read = HAL_GPIO_ReadPin(port, pin);
-    // 消抖处理
-    HAL_Delay(10);
-    if (HAL_GPIO_ReadPin(port, pin) != read)
-        return 0;
-    
-    return (read == KEY_PRESSED_LEVEL) ? 1 : 0;
+    return Key_ScanPressedEvent(GPIOE, GPIO_PIN_13);
 }
-
-// 测试按钮 - 全部替换为按键宏
-static inline uint8_t ARM_CATCH_KEY_Pressed(void)
+static inline uint8_t Key1_Pressed(void)
 {
-    return Key_ScanPressedEvent(ARM_CATCH_KEY_GPIO_PORT, ARM_CATCH_KEY_GPIO_PIN);
+    return Key_ScanPressedEvent(GPIOE, GPIO_PIN_14);
 }
-
-static inline uint8_t ARM_ROTATE_KEY_IsHeld(void)
+static inline uint8_t Key2_Pressed(void)
 {
-    return Key_GetState(ARM_ROTATE_KEY_GPIO_PORT, ARM_ROTATE_KEY_GPIO_PIN);
+    return Key_ScanPressedEvent(GPIOE, GPIO_PIN_15);
 }
-
-static inline uint8_t ARM_RAISEANDLOWER_KEY_Pressed(void)
+typedef enum
 {
-    return Key_ScanPressedEvent(ARM_RAISEANDLOWER_KEY_GPIO_PORT, ARM_RAISEANDLOWER_KEY_GPIO_PIN);
-}
+    arm_status_idle = 0,
+    arm_status_start,
+    arm_status_processing,
+    arm_status_success
+} arm_status_e;
 
+static arm_status_e arm_status = arm_status_idle;
 DJI_t rotate_motor;
 DJI_t raiseandlower_motor;
 DJI_t catch_motor;
-
 /**
  * 位置环控制实例
  */
 Motor_PosCtrl_t pos_rotate_motor;
 Motor_PosCtrl_t pos_raiseandlower_motor;
 Motor_PosCtrl_t pos_catch_motor;
-
 /**
  * 速度环控制实例
  */
@@ -159,15 +168,20 @@ Motor_VelCtrl_t vel_rotate_motor;
 Motor_VelCtrl_t vel_raiseandlower_motor;
 Motor_VelCtrl_t vel_catch_motor;
 
+extern void Motor_VelCtrl_PIDReset(Motor_VelCtrl_t *hctrl);
 /*
     相关函数
  */
-void Arm_Rotate(); // 机械臂旋转控制函数
-void Arm_Rotate_Stop();// 机械臂旋转停止函数
-void  Arm_Raiseandlower();// 机械臂升降控制函数
-void  Arm_Catch();// 机械臂抓取控制函数
+static uint8_t Motor_Pos_Control(Motor_PosCtrl_t *pos_ctrl, DJI_t *motor, float target_angel, float tolerance, const char *motor_name);
+uint8_t Arm_Rotate(float target_angel);
+uint8_t Arm_Lift(float target_angel);
+uint8_t Arm_Catch(float target_angel);
+uint8_t Arm_Pick_Place_Process(void);
+void motor_stop(void);
+void Arm_StallMonitor(void *argument);
 
 /* ====================== 初始化代码 ====================== */
+
 void TIM_Callback(TIM_HandleTypeDef *htim)
 {
     /**
@@ -175,35 +189,63 @@ void TIM_Callback(TIM_HandleTypeDef *htim)
      *
      * 只有被启用 (hctrl->enable == true) 的控制实例才会执行计算
      */
-    Motor_PosCtrlUpdate(&pos_raiseandlower_motor);
-    Motor_PosCtrlUpdate(&pos_catch_motor);
+    // Motor_PosCtrlUpdate(&pos_raiseandlower_motor);
+    //  Motor_PosCtrlCalculate(&pos_raiseandlower_motor);
+    // Motor_PosCtrlUpdate(&pos_catch_motor);
     Motor_PosCtrlUpdate(&pos_rotate_motor);
-    Motor_VelCtrlUpdate(&vel_raiseandlower_motor);
+     Motor_VelCtrlUpdate(&vel_raiseandlower_motor);
     Motor_VelCtrlUpdate(&vel_rotate_motor);
-    Motor_VelCtrlUpdate(&vel_catch_motor);
-    
     /**
      * 发送控制信号
      *
      * IQ_CMD_GROUP_1_4 和 IQ_CMD_GROUP_5_8 代表发送的电调 ID 组
      */
-    //DJI_SendSetIqCommand(&hcan1, IQ_CMD_GROUP_1_4);
+    // DJI_SendSetIqCommand(&hcan1, IQ_CMD_GROUP_1_4);
     // DJI_SendSetIqCommand(&hcan1, IQ_CMD_GROUP_5_8);
     DJI_SendSetIqCommand(&hcan2, IQ_CMD_GROUP_1_4);
     DJI_SendSetIqCommand(&hcan2, IQ_CMD_GROUP_5_8);
+    // motor_stop();
 }
-
 void DJI_Control_Init()
 {
+
+    /**
+     * Step0: 初始化 CAN 过滤器
+     *
+     * 默认使用一个过滤器 + 掩码模式
+     * 亦可以使用其他过滤器模式，处理函数与使用什么过滤器无关，只要保证数据能被接收到即可
+     */
     DJI_CAN_FilterInit(&hcan1, 0);
     DJI_CAN_FilterInit(&hcan2, 14);
-    
+    /**
+     * Step1: 注册 DJI CAN 处理回调
+     *
+     * 需要在 STM32CubeMX -> `Project Manager` -> `Advanced Settings`
+     *  -> `Register Callback` 中启用 CAN 回调
+     *
+     * 一般情况下我们只使用 Fifo0，因为 Fifo0 的优先度比 Fifo1 高，当然也可以两个都使用
+     */
     HAL_CAN_RegisterCallback(&hcan1, HAL_CAN_RX_FIFO0_MSG_PENDING_CB_ID, DJI_CAN_Fifo0ReceiveCallback);
     HAL_CAN_RegisterCallback(&hcan2, HAL_CAN_RX_FIFO0_MSG_PENDING_CB_ID, DJI_CAN_Fifo0ReceiveCallback);
-    
+    // HAL_CAN_RegisterCallback(&hcan1, HAL_CAN_RX_FIFO1_MSG_PENDING_CB_ID, DJI_CAN_Fifo1ReceiveCallback);
+
+    /* Step2: 启动 CAN
+     *
+     * CAN 必须在注册回调后再启用，否则回调无法正常注册，同样地，我们一般也只使用 Fifo0，亦可以两个都开
+     */
     CAN_Start(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING);
     CAN_Start(&hcan2, CAN_IT_RX_FIFO0_MSG_PENDING);
-    
+    // CAN_Start(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING);
+
+    /**
+     * Step3: 初始化电机
+     *
+     * auto_zero 这个参数实际上没有意义，因为 DJI 电机上电时本来就是清零了的，
+     * 只是参考的学长的驱动莫名的有这个东西，所以写的时候也写了这个东西，只是发现
+     * 用不上而已。
+     *
+     * 注意 (DJI_Config_t) 不能省去，否则会编译错误
+     */
     DJI_Init(&rotate_motor, &(DJI_Config_t){
                                 .auto_zero = false,       //< 是否在启动时自动清零角度
                                 .hcan = &hcan2,           //< 电机挂载在的 CAN 句柄
@@ -218,11 +260,18 @@ void DJI_Control_Init()
                                    });
     DJI_Init(&catch_motor, &(DJI_Config_t){
                                .auto_zero = false,       //< 是否在启动时自动清零角度
-                               .hcan = &hcan2,           //< 电机挂载在的 CAN 句柄
+                               .hcan = &hcan1,           //< 电机挂载在的 CAN 句柄
                                .motor_type = M2006_C610, //< 电机类型
-                               .id1 = 4,                 //< 电调 ID (1~8)
+                               .id1 = 6,                 //< 电调 ID (1~8)
                            });
-   
+    /**
+     * Step4: 初始化电机控制实例
+     *
+     * 控制电机所需要的 PID 参数在该步传入
+     * 注意：整个控制器内部并不会对输出的电流值进行限制，所以如果 abs_output_max
+     *      超过限幅，输出参数很可能溢出，故 abs_output_max 必须小于或等于电机
+     *      实际能接收的最大值
+     */
     Motor_VelCtrl_Init(&vel_catch_motor, //
                        &(Motor_VelCtrlConfig_t){
                            .motor_type = MOTOR_TYPE_DJI, //< 电机类型
@@ -252,6 +301,7 @@ void DJI_Control_Init()
                                .abs_output_max = 500.0f //< 限速，这是外环对内环的输出限幅
                            },
                            .pos_vel_freq_ratio = 1, //< 内外环频率比（外环的频率可能需要比内环低）
+
                        });
 
     Motor_VelCtrl_Init(&vel_rotate_motor, //
@@ -259,9 +309,9 @@ void DJI_Control_Init()
                            .motor_type = MOTOR_TYPE_DJI, //< 电机类型
                            .motor = &rotate_motor,       //< 控制的电机
                            .pid = (MotorPID_Config_t){
-                               .Kp = 200.0f,                           //
-                               .Ki = 0.05f,                            //
-                               .Kd = 0.0f,                        //
+                               .Kp = 200.0f,             //
+                               .Ki = 0.05f,              //
+                               .Kd = 0.0f,               //
                                .abs_output_max = 8000.0f //< 限幅为电流控制最大值
                            },
                        });
@@ -272,17 +322,18 @@ void DJI_Control_Init()
                            .motor = &rotate_motor,       //< 电机nstant>, K
                            .velocity_pid = (MotorPID_Config_t){
                                .Kp = 100.0f,
-                               .Ki = 0.5f,                             //<
-                               .Kd = 0.9f,                                //<
+                               .Ki = 0.5f,               //<
+                               .Kd = 0.9f,               //<
                                .abs_output_max = 8000.0f //< DJI_M3508_C620_IQ_MAX //< 限幅为电流控制最大值
                            },
                            .position_pid = (MotorPID_Config_t){
-                               .Kp = 24.5f,              //<
-                               .Ki = 0.42f,            //<
-                               .Kd = 100.0f,              //<
+                               .Kp = 5.0f,              //<
+                               .Ki = 0.02f,             //<
+                               .Kd = 0.8f,              //<
                                .abs_output_max = 500.0f //< 限速，这是外环对内环的输出限幅
                            },
-                           .pos_vel_freq_ratio = 10, //< 内外环频率比（外环的频率可能需要比内环低）
+                           .pos_vel_freq_ratio = 1, //< 内外环频率比（外环的频率可能需要比内环低）
+
                        });
 
     Motor_VelCtrl_Init(&vel_raiseandlower_motor, //
@@ -296,7 +347,24 @@ void DJI_Control_Init()
                                .abs_output_max = 8000.0f //< 限幅为电流控制最大值
                            },
                        });
-
+    /*Motor_PosCtrl_Init(&pos_raiseandlower_motor, //
+                       &(Motor_PosCtrlConfig_t){
+                           .motor_type = MOTOR_TYPE_DJI,  //< 电机类型
+                           .motor = &raiseandlower_motor, //< 控制的电机
+                           .velocity_pid = (MotorPID_Config_t){
+                               .Kp = 5.0f,             //<
+                               .Ki = 0.18f,             //<
+                               .Kd = 0.2f,               //<
+                               .abs_output_max = 8000.0f //< DJI_M3508_C620_IQ_MAX //< 限幅为电流控制最大值
+                           },
+                           .position_pid = (MotorPID_Config_t){
+                               .Kp = 50.0f,               //<
+                               .Ki = 0.08f,              //<
+                               .Kd = 0.0f,              //<
+                               .abs_output_max = 8000.0f //< 限速，这是外环对内环的输出限幅
+                           },
+                           .pos_vel_freq_ratio = 10, //< 内外环频率比（外环的频率可能需要比内环低）
+                       });*/
     Motor_PosCtrl_Init(&pos_raiseandlower_motor, //
                        &(Motor_PosCtrlConfig_t){
                            .motor_type = MOTOR_TYPE_DJI,  //< 电机类型
@@ -308,27 +376,28 @@ void DJI_Control_Init()
                                .abs_output_max = 8000.0f //< DJI_M3508_C620_IQ_MAX //< 限幅为电流控制最大值
                            },
                            .position_pid = (MotorPID_Config_t){
-                               .Kp = 5.0f,               //<
-                               .Ki = 0.2f,              //<
-                               .Kd = 0.50f,              //<
+                               .Kp = 2.0f,               //<
+                               .Ki = 0.01f,              //<
+                               .Kd = 0.20f,              //<
                                .abs_output_max = 2000.0f //< 限速，这是外环对内环的输出限幅
                            },
-                           .pos_vel_freq_ratio = 10, //< 内外环频率比（外环的频率可能需要比内环低）
+                           .pos_vel_freq_ratio = 1, //< 内外环频率比（外环的频率可能需要比内环低）
                        });
-    
     /**
      * Step5(可选): 启用或禁用控制实例
      *
      * 控制实例在初始化时默认是启动的，所以大部分情况此步可以省略。
      * 但是在有多个控制实例的情况下，必须仅保持一个控制实例开启
      */
-     __MOTOR_CTRL_ENABLE(&pos_catch_motor);
-    __MOTOR_CTRL_DISABLE(&vel_catch_motor);
-    __MOTOR_CTRL_ENABLE(&pos_raiseandlower_motor);
-    __MOTOR_CTRL_DISABLE(&vel_raiseandlower_motor);
+    //__MOTOR_CTRL_ENABLE(&vel_rotate_motor);
+    //__MOTOR_CTRL_DISABLE(&pos_rotate_motor);
+    __MOTOR_CTRL_ENABLE(&vel_raiseandlower_motor);
+    __MOTOR_CTRL_DISABLE(&pos_raiseandlower_motor);
+    // __MOTOR_CTRL_DISABLE(&vel_rotate_motor);
+    // __MOTOR_CTRL_ENABLE(&pos_rotate_motor);
     __MOTOR_CTRL_DISABLE(&vel_rotate_motor);
-    __MOTOR_CTRL_ENABLE(&pos_rotate_motor);
-    
+    __MOTOR_CTRL_DISABLE(&pos_rotate_motor);
+
     /*
      * Step6: 注册定时器回调并开启定时器
      *
@@ -338,77 +407,146 @@ void DJI_Control_Init()
     HAL_TIM_RegisterCallback(&htim6, HAL_TIM_PERIOD_ELAPSED_CB_ID, TIM_Callback);
     HAL_TIM_Base_Start_IT(&htim6);
 }
-
 /**
  * 定时器回调函数，用于定时进行 PID 计算和 CAN 指令发送
  * @param htim unused
  */
+
 void Arm_Init(void *argument)
 {
     /* 初始化代码 */
-    static uint8_t key1_prev_state = 0; // 记录Key1上一状态
+
+    float target_angle1 = 100.0f;
+    float target_angle2 = 10.0f;
     DJI_Control_Init();
+    arm_state = ARM_STATE_IDLE;
+    // Motor_PosCtrl_SetRef(&pos_rotate_motor, 100.0f);
+     Motor_VelCtrl_SetRef(&vel_raiseandlower_motor, 60.0f);
+    //__MOTOR_CTRL_DISABLE(&vel_raiseandlower_motor);
+    //__MOTOR_CTRL_DISABLE(&pos_raiseandlower_motor);
+
     for (;;)
     {
-        uint8_t arm_catch_key = ARM_CATCH_KEY_Pressed();
-        uint8_t arm_rotate_key_held = ARM_ROTATE_KEY_IsHeld();
-        uint8_t arm_raiseandlower_key = ARM_RAISEANDLOWER_KEY_Pressed();
-        if (arm_catch_key)
-        {   
-            Arm_Catch();
-        }
-        if (arm_rotate_key_held)
+        uint8_t key0 = Key0_Pressed();
+        uint8_t key1 = Key1_Pressed();
+        uint8_t key2 = Key2_Pressed();
+        if (key0)
         {
-            // 首次按下时切换模式
-            if (key1_prev_state == 0)
-            {
-                Arm_Rotate();
-            }
-            key1_prev_state = 1;
+            osDelay(5000);
+            target_angle1 += 200.0f;
+            __MOTOR_CTRL_DISABLE(&vel_rotate_motor);
+            __MOTOR_CTRL_ENABLE(&pos_rotate_motor);
+            Motor_PosCtrl_SetRef(&pos_rotate_motor, target_angle1);
+            osDelay(5000);
+            target_angle1 = 600.0f;
+            Motor_PosCtrl_SetRef(&pos_rotate_motor, target_angle1);
+            osDelay(5000);
+            target_angle1 = 0.0f;
+            Motor_PosCtrl_SetRef(&pos_rotate_motor, target_angle1);
+            osDelay(5000);
         }
-        else
+        else if (key1)
         {
-            // 松开时停止
-            if (key1_prev_state == 1)
-            {
-                Arm_Rotate_Stop();
-                
-            }
-            key1_prev_state = 0;
+            target_angle1 -= 200.0f;
+            __MOTOR_CTRL_ENABLE(&pos_rotate_motor);
+            Motor_PosCtrl_SetRef(&pos_rotate_motor, target_angle1);
+            // target_angle1 -= 200.0f;
+            // Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, target_angle1);
         }
-        if (arm_raiseandlower_key)
+        else if (key2)
         {
-            Arm_Raiseandlower();
+            __MOTOR_CTRL_DISABLE(&pos_rotate_motor);
+            __MOTOR_CTRL_ENABLE(&vel_rotate_motor);
+            Motor_VelCtrl_SetRef(&vel_rotate_motor, 60.0f);
+            // Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, target_angle1);
         }
+        osDelay(10);
     }
-    
     // Motor_VelCtrl_SetRef(&vel_rotate_motor,60.0f);
     /* 初始化完成后退出线程 */
     osThreadExit();
 }
 
-/* ====================== 机械臂控制流程函数实现 ====================== */
-/**
- * @brief 旋转电机控制
- * @retval 1-成功（误差达标）
- */
-void Arm_Rotate()
+// 将当前所有相关电机安全停机：先清零电流指令，再关闭控制环
+static void Arm_SafeStopAllMotors(void)
 {
-    __MOTOR_CTRL_DISABLE(&pos_rotate_motor); // 关闭位置环
-    __MOTOR_CTRL_ENABLE(&vel_rotate_motor);  // 开启速度环
-    Motor_VelCtrl_SetRef(&vel_rotate_motor, ARM_ROTATE_SPEED); // 设置转速
+    // 清零当前三轴电机的电流指令（下一个 CAN 周期即发送 0）
+    catch_motor.iq_cmd = 0;
+    raiseandlower_motor.iq_cmd = 0;
+    rotate_motor.iq_cmd = 0;
+
+    // 禁用对应的速度环和位置环控制实例，停止后续 PID 更新
+    __MOTOR_CTRL_DISABLE(&vel_catch_motor);
+    __MOTOR_CTRL_DISABLE(&pos_catch_motor);
+    __MOTOR_CTRL_DISABLE(&vel_raiseandlower_motor);
+    __MOTOR_CTRL_DISABLE(&pos_raiseandlower_motor);
+    __MOTOR_CTRL_DISABLE(&vel_rotate_motor);
+    __MOTOR_CTRL_DISABLE(&pos_rotate_motor);
 }
 
-void Arm_Rotate_Stop()
+// 堵转处理：进入错误状态并关闭执行机构
+static void Arm_OnStall(void)
 {
-    Motor_VelCtrl_SetRef(&vel_rotate_motor, 0.0f); // 速度归零
-                
-    // 切回位置环并锁定当前位置
-    __MOTOR_CTRL_DISABLE(&vel_rotate_motor);
-    __MOTOR_CTRL_ENABLE(&pos_rotate_motor);
-    // 更新位置环目标值为当前电机角度，防止电机突然回退
-    Motor_ResetAngle(MOTOR_TYPE_DJI, &rotate_motor);
-    Motor_PosCtrl_SetRef(&pos_rotate_motor, 0.0f);
+    // 记录进入错误前所处的流程状态（仅记录有效工作状态）
+    if (arm_state != ARM_STATE_IDLE && arm_state != ARM_STATE_ERROR)
+    {
+        arm_state_before_error = arm_state;
+    }
+
+    // 安全停机：先拉到零指令再关闭所有相关电机控制
+    Arm_SafeStopAllMotors();
+
+    // 标记机械臂错误状态，由控制线程决定后续如何恢复
+    arm_state = ARM_STATE_ERROR;
+}
+
+/* ====================== 机械臂控制流程函数实现 ====================== */
+static uint8_t Motor_Pos_Control(Motor_PosCtrl_t *pos_ctrl, DJI_t *motor,
+                                 float target_angel, float tolerance,
+                                 const char *motor_name)
+{
+    // 使能对应的位置环控制（统一在这里开启）
+    if (arm_state == ARM_STATE_ERROR)
+    {
+        return 0; // 错误状态下不再启动新动作
+    }
+    __MOTOR_CTRL_ENABLE(pos_ctrl);
+
+    // 设置目标位置
+    Motor_PosCtrl_SetRef(pos_ctrl, target_angel);
+
+    while (1)
+    {
+        // 若在执行过程中检测到错误状态（如堵转触发），立即退出
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        // 获取电机当前角度
+        float current_pos = Motor_GetAngle(motor->motor_type, motor);
+
+        // 误差达标判定
+        if (fabs(current_pos - target_angel) < tolerance)
+        {
+            // printf("[%s] 到位：目标=%.2f rad，当前=%.2f rad\r\n",
+            // motor_name, target_angel, current_pos);
+            return 1;
+        }
+
+        osDelay(10); // 10ms轮询一次
+    }
+    return 1;
+}
+
+/**
+ * @brief 旋转电机控制
+ * @param target_angel 目标角度(degree)
+ * @retval 1-成功（误差达标）
+ */
+uint8_t Arm_Rotate(float target_angel)
+{
+    return Motor_Pos_Control(&pos_rotate_motor, &rotate_motor,
+                             target_angel, ROTATE_TOLERANCE, "旋转电机");
 }
 
 /**
@@ -416,27 +554,10 @@ void Arm_Rotate_Stop()
  * @param target_angel 目标角度(degree)
  * @retval 1-成功（误差达标）
  */
-void Arm_Raiseandlower()
+uint8_t Arm_Lift(float target_angel)
 {
-    static int height_level = 0;
-    height_level++;
-    
-    switch (height_level)
-    {
-        case 1:
-            Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_RAISEANDLOWER_HEIGHT_LOW);
-            break;
-        case 2:
-            Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_RAISEANDLOWER_HEIGHT_MIDDLE);
-            break;
-        case 3:
-            Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_RAISEANDLOWER_HEIGHT_HIGH);
-            break;
-        default:
-            height_level = 0;
-            Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_RESET_ANGLE);
-            break;
-    }
+    return Motor_Pos_Control(&pos_raiseandlower_motor, &raiseandlower_motor,
+                             target_angel, LIFT_TOLERANCE, "升降电机");
 }
 
 /**
@@ -444,32 +565,248 @@ void Arm_Raiseandlower()
  * @param target_angel 目标角(degree)
  * @retval 1-成功（误差达标）
  */
-void Arm_Catch()
+uint8_t Arm_Catch(float target_angel)
 {
-    static uint8_t rotate_state = 0;
-   rotate_state++;
-    switch (rotate_state)
-    {
-         case 1:
-              Motor_PosCtrl_SetRef(&pos_catch_motor, ARM_CATCH_PUSH_ANGLE);
-              break;
-         default:
-              rotate_state = 0;
-              Motor_PosCtrl_SetRef(&pos_catch_motor, ARM_RESET_ANGLE);
-              break;
-    }
+    return Motor_Pos_Control(&pos_catch_motor, &catch_motor,
+                             target_angel, CATCH_TOLERANCE, "抓取电机");
 }
 
 /**
  * @brief 机械臂抓取-放置完整流程
  * @retval 1-流程完成
  */
+uint8_t Arm_Pick_Place_Process(void)
+{
+    // 非空闲状态拒绝执行
+    if (arm_state != ARM_STATE_IDLE)
+    {
+        // printf("机械臂忙，无法启动抓取放置流程！\r\n");
+        return 0;
+    }
 
+    // 根据上一次错误前的状态决定从哪一个阶段重新开始
+    Arm_StateTypeDef start_state = ARM_STATE_ROTATE_TO_PICK;
+    if (arm_state_before_error > ARM_STATE_IDLE && arm_state_before_error < ARM_STATE_ERROR)
+    {
+        start_state = arm_state_before_error;
+    }
+    // 使用一次后清除，下次若正常完成则从头开始
+    arm_state_before_error = ARM_STATE_IDLE;
+
+    // 步骤1：旋转到抓取位
+    if (start_state <= ARM_STATE_ROTATE_TO_PICK)
+    {
+        arm_state = ARM_STATE_ROTATE_TO_PICK;
+        if (!Arm_Rotate(PICK_ROTATE_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
+
+    // 步骤2：升降到抓取高度
+    if (start_state <= ARM_STATE_LIFT_TO_PICK)
+    {
+        arm_state = ARM_STATE_LIFT_TO_PICK;
+        if (!Arm_Lift(PICK_LIFT_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
+
+    // 步骤3：抓取电机推出（夹紧物体）
+    if (start_state <= ARM_STATE_CATCH_CLOSE)
+    {
+        arm_state = ARM_STATE_CATCH_CLOSE;
+        if (!Arm_Catch(CATCH_CLOSE_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+
+        // 电磁阀夹紧之前先启动气泵
+        Pump_SetPower(75); // 气泵功率，可根据需要调整
+        osDelay(100);      // 给气泵一点建立真空的时间
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+
+        Pump_ValveOn(); // 电磁阀夹紧
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
+
+    // 步骤4：抓取后抬升（使卷轴离开平台）
+    if (start_state <= ARM_STATE_LIFT_UP)
+    {
+        arm_state = ARM_STATE_LIFT_UP;
+        if (!Arm_Lift(PLACE_LIFT_ANGLE + 0.3f) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
+
+    // 步骤5：旋转到放置位
+    if (start_state <= ARM_STATE_ROTATE_TO_PLACE)
+    {
+        arm_state = ARM_STATE_ROTATE_TO_PLACE;
+        if (!Arm_Rotate(PLACE_ROTATE_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
+
+    // 步骤6：升降到放置高度
+    if (start_state <= ARM_STATE_LIFT_TO_PLACE)
+    {
+        arm_state = ARM_STATE_LIFT_TO_PLACE;
+        if (!Arm_Lift(PLACE_LIFT_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
+
+    // 步骤7：抓取电机推到指定角度（释放物体）
+    if (start_state <= ARM_STATE_CATCH_OPEN)
+    {
+        arm_state = ARM_STATE_CATCH_OPEN;
+        if (!Arm_Catch(CATCH_OPEN_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+
+        // 先打开电磁阀
+        Pump_ValveOff();
+        osDelay(100); // 确保电磁阀已经完全打开，先放气
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+
+        // 电磁阀打开之后再停止气泵
+        Pump_SetPower(0);
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
+
+    // 步骤8：升降复位
+    if (start_state <= ARM_STATE_LIFT_RESET)
+    {
+        arm_state = ARM_STATE_LIFT_RESET;
+        if (!Arm_Lift(PICK_LIFT_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
+
+    // 步骤9：旋转复位
+    if (start_state <= ARM_STATE_ROTATE_RESET)
+    {
+        arm_state = ARM_STATE_ROTATE_RESET;
+        if (!Arm_Rotate(PICK_ROTATE_ANGLE) || arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+        osDelay(ACTION_DELAY_MS);
+
+        if (arm_state == ARM_STATE_ERROR)
+        {
+            return 0;
+        }
+    }
+
+    // 流程完成，恢复空闲状态
+    arm_state = ARM_STATE_IDLE;
+    // printf("===== 抓取-放置流程完成 =====\r\n");
+    return 1;
+}
 /**
  * @brief 机械臂控制线程（状态机驱动）
  * @param argument 线程参数
  * @retval None
  */
+void Arm_Control(void *argument)
+{
+    // osDelay(5000); // 等待系统初始化完成
+    //  printf("机械臂控制线程启动\r\n");
+
+    while (1)
+    {
+        switch (arm_state)
+        {
+        case ARM_STATE_IDLE:
+            // 空闲状态：等待上层触发流程（这里用按键 KEY0 作为示例触发源）
+            if (Key0_Pressed())
+            {
+                // 只有在确实空闲时才启动完整抓取-放置流程
+                Arm_Pick_Place_Process();
+            }
+            osDelay(50);
+            break;
+
+        case ARM_STATE_ERROR:
+            // 堵转或错误状态下的简单复位策略：确保执行机构关闭，然后回到空闲
+            __MOTOR_CTRL_DISABLE(&vel_catch_motor);
+            __MOTOR_CTRL_DISABLE(&pos_catch_motor);
+            __MOTOR_CTRL_DISABLE(&vel_raiseandlower_motor);
+            __MOTOR_CTRL_DISABLE(&pos_raiseandlower_motor);
+            arm_state = ARM_STATE_IDLE;
+            osDelay(100);
+            break;
+
+        default:
+            // 正在执行动作，由流程函数驱动
+            osDelay(10);
+            break;
+        }
+    }
+    // osThreadExit();
+}
 
 void motor_stop(void)
 {
@@ -477,4 +814,102 @@ void motor_stop(void)
     {
         Motor_VelCtrl_SetRef(&vel_catch_motor, 0.0f);
     }
+}
+
+// 堵转监视任务：在机械臂处于工作状态时监视电机是否堵转
+void Arm_StallMonitor(void *argument)
+{
+    uint32_t catch_stall_start = 0;
+    uint8_t catch_stall_active = 0;
+    uint32_t lift_stall_start = 0;
+    uint8_t lift_stall_active = 0;
+    uint32_t rotate_stall_start = 0;
+    uint8_t rotate_stall_active = 0;
+
+    for (;;)
+    {
+        // 仅在机械臂非空闲状态时进行堵转检测
+        if (arm_state != ARM_STATE_IDLE && arm_state != ARM_STATE_ERROR)
+        {
+            uint32_t now = HAL_GetTick();
+
+            // 抓取电机堵转判定（使用电机当前速度和电流指令）
+            float catch_vel = catch_motor.velocity;
+            float catch_iq = catch_motor.iq_cmd;
+            uint8_t catch_cond = (fabsf(catch_iq) > STALL_OUT_TH_CATCH) &&
+                                 (fabsf(catch_vel) < STALL_VEL_TH_CATCH);
+
+            if (catch_cond)
+            {
+                if (!catch_stall_active)
+                {
+                    catch_stall_active = 1;
+                    catch_stall_start = now;
+                }
+                else if ((now - catch_stall_start) >= STALL_CONFIRM_MS)
+                {
+                    Arm_OnStall();
+                }
+            }
+            else
+            {
+                catch_stall_active = 0;
+            }
+
+            // 升降电机堵转判定（使用速度环控制输出和实际速度）
+            float lift_vel = raiseandlower_motor.velocity;
+            float lift_out = vel_raiseandlower_motor.pid.output;
+            uint8_t lift_cond = (fabsf(lift_out) > STALL_OUT_TH_LIFT) &&
+                                (fabsf(lift_vel) < STALL_VEL_TH_LIFT);
+
+            if (lift_cond)
+            {
+                if (!lift_stall_active)
+                {
+                    lift_stall_active = 1;
+                    lift_stall_start = now;
+                }
+                else if ((now - lift_stall_start) >= STALL_CONFIRM_MS)
+                {
+                    Arm_OnStall();
+                }
+            }
+            else
+            {
+                lift_stall_active = 0;
+            }
+
+            // 旋转电机堵转判定（使用速度环控制输出和实际速度）
+            float rotate_vel = rotate_motor.velocity;
+            float rotate_out = vel_rotate_motor.pid.output;
+            uint8_t rotate_cond = (fabsf(rotate_out) > STALL_OUT_TH_ROTATE) &&
+                                  (fabsf(rotate_vel) < STALL_VEL_TH_ROTATE);
+
+            if (rotate_cond)
+            {
+                if (!rotate_stall_active)
+                {
+                    rotate_stall_active = 1;
+                    rotate_stall_start = now;
+                }
+                else if ((now - rotate_stall_start) >= STALL_CONFIRM_MS)
+                {
+                    Arm_OnStall();
+                }
+            }
+            else
+            {
+                rotate_stall_active = 0;
+            }
+        }
+
+        osDelay(5); // 5ms 轮询一次
+    }
+}
+
+/* ====================== 串口重定向 ====================== */
+int fputc(int ch, FILE *f)
+{
+    HAL_UART_Transmit(&huart4, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
+    return ch;
 }
