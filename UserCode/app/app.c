@@ -6,6 +6,7 @@
  * @date    2025-12-09
  */
 #include "app.h"
+#include "drivers/pump_ctrl.h" // 气泵与电磁阀控制库
 #include "math.h"
 
 // 电磁阀控制引脚定义
@@ -212,13 +213,13 @@ void DJI_Control_Init()
                             });
     DJI_Init(&raiseandlower_motor, &(DJI_Config_t){
                                        .auto_zero = false,       //< 是否在启动时自动清零角度
-                                       .hcan = &hcan2,           //< 电机挂载在的 CAN 句柄
+                                       .hcan = &hcan1,           //< 电机挂载在的 CAN 句柄
                                        .motor_type = M3508_C620, //< 电机类型
                                        .id1 = 1,                 //< 电调 ID (1~8)
                                    });
     DJI_Init(&catch_motor, &(DJI_Config_t){
                                .auto_zero = false,       //< 是否在启动时自动清零角度
-                               .hcan = &hcan2,           //< 电机挂载在的 CAN 句柄
+                               .hcan = &hcan1,           //< 电机挂载在的 CAN 句柄
                                .motor_type = M2006_C610, //< 电机类型
                                .id1 = 4,                 //< 电调 ID (1~8)
                            });
@@ -314,6 +315,24 @@ void DJI_Control_Init()
                                .abs_output_max = 2000.0f //< 限速，这是外环对内环的输出限幅
                            },
                            .pos_vel_freq_ratio = 10, //< 内外环频率比（外环的频率可能需要比内环低）
+                       });*/
+    Motor_PosCtrl_Init(&pos_raiseandlower_motor, //
+                       &(Motor_PosCtrlConfig_t){
+                           .motor_type = MOTOR_TYPE_DJI,  //< 电机类型
+                           .motor = &raiseandlower_motor, //< 控制的电机
+                           .velocity_pid = (MotorPID_Config_t){
+                               .Kp = 100.0f,             //<
+                               .Ki = 0.001f,             //<
+                               .Kd = 0.5f,               //<
+                               .abs_output_max = 8000.0f //< DJI_M3508_C620_IQ_MAX //< 限幅为电流控制最大值
+                           },
+                           .position_pid = (MotorPID_Config_t){
+                               .Kp = 2.0f,               //<
+                               .Ki = 0.01f,              //<
+                               .Kd = 0.20f,              //<
+                               .abs_output_max = 2000.0f //< 限速，这是外环对内环的输出限幅
+                           },
+                           .pos_vel_freq_ratio = 1, //< 内外环频率比（外环的频率可能需要比内环低）
                        });
     
     /**
