@@ -420,10 +420,10 @@ void Pump_test()
     for(;;){
         Pump_RelayOn(&pump1);
         Pump_ValveOff(&pump1);
-        osDelay(500);
-        Pump_RelayOff(&pump1);
+        osDelay(15000);
         Pump_ValveOn(&pump1);
-        osDelay(500);
+        Pump_RelayOff(&pump1);
+        osDelay(15000);
     }
 }
 
