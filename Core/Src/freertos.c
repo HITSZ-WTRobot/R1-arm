@@ -59,7 +59,14 @@ osThreadId_t arm_InitHandle;
 const osThreadAttr_t arm_Init_attributes = {
   .name = "arm_Init",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityRealtime7,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for pump_test */
+osThreadId_t pump_testHandle;
+const osThreadAttr_t pump_test_attributes = {
+  .name = "pump_test",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -69,6 +76,7 @@ const osThreadAttr_t arm_Init_attributes = {
 
 void StartDefaultTask(void *argument);
 extern void Arm_Init(void *argument);
+extern void Pump_test(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -105,6 +113,9 @@ void MX_FREERTOS_Init(void) {
   /* creation of arm_Init */
   arm_InitHandle = osThreadNew(Arm_Init, NULL, &arm_Init_attributes);
 
+  /* creation of pump_test */
+  pump_testHandle = osThreadNew(Pump_test, NULL, &pump_test_attributes);
+
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -132,6 +143,15 @@ void StartDefaultTask(void *argument)
   }
   /* USER CODE END StartDefaultTask */
 }
+
+/* USER CODE BEGIN Header_Pump_test */
+/**
+* @brief Function implementing the pump_test thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_Pump_test */
+
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */

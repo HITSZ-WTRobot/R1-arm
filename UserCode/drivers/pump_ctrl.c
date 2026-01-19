@@ -36,6 +36,8 @@ void Pump_Init(Pump_t* hpump, const Pump_Config_t* config)
     hpump->pump_pin   = config->pump_pin;
     hpump->valve_pin  = config->valve_pin;
     hpump->invert     = config->invert;
+    HAL_GPIO_WritePin(hpump->valve_port, hpump->valve_pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(hpump->pump_port, hpump->pump_pin, GPIO_PIN_RESET);
 }
 
 void Pump_SetPower(Pump_t* hpump, uint8_t power)

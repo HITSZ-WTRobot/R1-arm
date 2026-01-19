@@ -7,14 +7,24 @@
  */
 #include "app.h"
 #include "math.h"
+#include "pump_ctrl.h"
 
-// 电磁阀控制引脚定义
-#define SOLENOID_VALVE_GPIO_PORT GPIOE
-#define SOLENOID_VALVE_GPIO_PIN GPIO_PIN_8
+// 气泵与电磁阀配置定义
+#define PUMP_VALVE_GPIO_Port GPIOE
+#define PUMP_VALVE_Pin GPIO_PIN_3
+#define PUMP_RELAY_GPIO_Port GPIOE
+#define PUMP_RELAY_Pin GPIO_PIN_4
 
-// 电磁阀控制宏（注：此处与上方定义重复，建议确认实际使用的引脚）
-#define SOLENOID_VALVE_GPIO_PORT GPIOA
-#define SOLENOID_VALVE_GPIO_PIN GPIO_PIN_0
+
+Pump_Config_t pump1_config = {
+    .htim = &htim3,
+    .channel = TIM_CHANNEL_1,
+    .valve_port = PUMP_VALVE_GPIO_Port,
+    .valve_pin = PUMP_VALVE_Pin,
+    .pump_port = PUMP_RELAY_GPIO_Port,
+    .pump_pin = PUMP_RELAY_Pin,
+    .invert = 1
+};
 
 // 按键定义
 #define ARM_CATCH_KEY_GPIO_PORT GPIOE
@@ -356,6 +366,7 @@ void DJI_Control_Init()
  */
 void Arm_Init(void *argument)
 {
+    
     /* 初始化代码 */
     static uint8_t key1_prev_state = 0; // 记录Key1上一状态
     DJI_Control_Init();
@@ -397,6 +408,25 @@ void Arm_Init(void *argument)
     /* 初始化完成后退出线程 */
     osThreadExit();
 }
+
+
+/**
+ * @brief 气泵调试运行函数运行函数
+*/
+void Pump_test()
+{
+    Pump_t pump1;
+    Pump_Init(&pump1,&pump1_config);
+    for(;;){
+        Pump_RelayOn(&pump1);
+        Pump_ValveOff(&pump1);
+        osDelay(500);
+        Pump_RelayOff(&pump1);
+        Pump_ValveOn(&pump1);
+        osDelay(500);
+    }
+}
+
 
 /* ====================== 机械臂控制流程函数实现 ====================== */
 /**

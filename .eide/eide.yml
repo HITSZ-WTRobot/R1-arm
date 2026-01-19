@@ -33,6 +33,7 @@ targets:
         - Drivers/CMSIS/Device/ST/STM32F4xx/Include
         - Drivers/CMSIS/Include
         - UserCode
+        - UserCode/drivers
       libList: []
     excludeList: []
     toolchain: GCC

@@ -18,10 +18,8 @@ typedef struct
 {
 	TIM_HandleTypeDef* htim;        // 使用的定时器
 	uint32_t           channel;     // PWM 通道
-
     GPIO_TypeDef*    valve_port;  // 电磁阀继电器 GPIO 端口
     GPIO_TypeDef*    pump_port;  // 气泵继电器 GPIO 端口
-
     uint16_t         valve_pin;   // 电磁阀 GPIO 引脚
     uint16_t         pump_pin;   // 气泵 GPIO 引脚
     uint8_t          invert;      // PWM 反向：1 反向，0 正向
