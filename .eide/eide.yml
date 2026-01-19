@@ -69,7 +69,7 @@ targets:
             LIB_FLAGS: -lm
             output-format: elf
             remove-unused-input-sections: true
-        scatterFilePath: C:\STM32\project\R1-Arm\STM32F407XX_FLASH.ld
+        scatterFilePath: STM32F407XX_FLASH.ld
         storageLayout:
           RAM: []
           ROM: []
