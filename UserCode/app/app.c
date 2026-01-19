@@ -159,13 +159,6 @@ Motor_VelCtrl_t vel_rotate_motor;
 Motor_VelCtrl_t vel_raiseandlower_motor;
 Motor_VelCtrl_t vel_catch_motor;
 
-/*
-    相关函数
- */
-void Arm_Rotate(); // 机械臂旋转控制函数
-void Arm_Rotate_Stop();// 机械臂旋转停止函数
-void  Arm_Raiseandlower();// 机械臂升降控制函数
-void  Arm_Catch();// 机械臂抓取控制函数
 
 /* ====================== 初始化代码 ====================== */
 void TIM_Callback(TIM_HandleTypeDef *htim)
