@@ -215,13 +215,13 @@ void DJI_Control_Init()
                             });
     DJI_Init(&raiseandlower_motor, &(DJI_Config_t){
                                        .auto_zero = false,       //< 是否在启动时自动清零角度
-                                       .hcan = &hcan1,           //< 电机挂载在的 CAN 句柄
+                                       .hcan = &hcan2,           //< 电机挂载在的 CAN 句柄
                                        .motor_type = M3508_C620, //< 电机类型
                                        .id1 = 1,                 //< 电调 ID (1~8)
                                    });
     DJI_Init(&catch_motor, &(DJI_Config_t){
                                .auto_zero = false,       //< 是否在启动时自动清零角度
-                               .hcan = &hcan1,           //< 电机挂载在的 CAN 句柄
+                               .hcan = &hcan2,           //< 电机挂载在的 CAN 句柄
                                .motor_type = M2006_C610, //< 电机类型
                                .id1 = 4,                 //< 电调 ID (1~8)
                            });
@@ -370,6 +370,10 @@ void Arm_Init(void *argument)
     /* 初始化代码 */
     static uint8_t key1_prev_state = 0; // 记录Key1上一状态
     DJI_Control_Init();
+    Pump_t pump1;
+    Pump_Init(&pump1,&pump1_config);
+    Pump_RelayOn(&pump1);
+    Pump_ValveOff(&pump1);
     for (;;)
     {
         uint8_t arm_catch_key = ARM_CATCH_KEY_Pressed();
@@ -417,14 +421,8 @@ void Pump_test()
 {
     Pump_t pump1;
     Pump_Init(&pump1,&pump1_config);
-    for(;;){
-        Pump_RelayOn(&pump1);
-        Pump_ValveOff(&pump1);
-        osDelay(15000);
-        Pump_ValveOn(&pump1);
-        Pump_RelayOff(&pump1);
-        osDelay(15000);
-    }
+    Pump_RelayOn(&pump1);
+    Pump_ValveOff(&pump1);
 }
 
 

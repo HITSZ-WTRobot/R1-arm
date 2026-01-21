@@ -113,8 +113,6 @@ void MX_FREERTOS_Init(void) {
   /* creation of arm_Init */
   arm_InitHandle = osThreadNew(Arm_Init, NULL, &arm_Init_attributes);
 
-  /* creation of pump_test */
-  pump_testHandle = osThreadNew(Pump_test, NULL, &pump_test_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
