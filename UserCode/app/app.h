@@ -35,8 +35,7 @@ void Arm_Rotate_Stop();// 机械臂旋转停止函数
 void  Arm_Raiseandlower(uint8_t enable);// 机械臂升降控制函数
 void  Arm_Catch(uint8_t enable);// 机械臂抓取控制函数
 
-//调试用代码
-// void  Arm_Raiseandlower_Step50();// 升降电机在当前位置基础上每次加 50 度
+
 
 // 一键取卷轴流程：高 / 中 / 低
 void Arm_PickHigh(void);
@@ -44,7 +43,7 @@ void Arm_PickMid(void);
 void Arm_PickLow(void);
 
 // 遥控器/上层控制调用接口（输入均为 1/0 或枚举）
-void Arm_SetLevelRC(Arm_PickLevel_t level); // 设置当前 LEVEL 档位
+Arm_PickLevel_t Arm_SetLevelRC(Arm_PickLevel_t level); // 设置 LEVEL 档位，若流程未完成则保持原档位并返回当前值
 void Arm_StepRC(uint8_t step);              // STEP 输入：1 表示本周期按下，0 表示松开
 void Arm_ResetRC(uint8_t reset);            // RESET 输入：1 表示本周期按下，0 表示松开
 uint8_t Arm_GetStateRC(void);               // 获取当前步骤编号，便于显示/调试

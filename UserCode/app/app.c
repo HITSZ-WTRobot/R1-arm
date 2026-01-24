@@ -366,47 +366,7 @@ void DJI_Control_Init()
     HAL_TIM_Base_Start_IT(&htim6);
 }
 
-float arm_height = 0.0f;
-float arm_rotate_angle = 0.0f;
-float arm_catch_angle = 0.0f;
-/**
- * 定时器回调函数，用于定时进行 PID 计算和 CAN 指令发送
- * @param htim unused
- */
-
-//调试代码
-// void Arm_Init(void *argument)
-// {
-//     /* 初始化代码 */
-//     DJI_Control_Init();
-//     Pump_Init(&pump1,&pump1_config);
-//     for (;;)
-//     {
-//         uint8_t arm_catch_key = ARM_CATCH_KEY_Pressed();
-//         uint8_t arm_rotate_key = ARM_ROTATE_KEY_Pressed();
-//         uint8_t arm_raiseandlower_key = ARM_RAISEANDLOWER_KEY_Pressed();
-//         if (arm_catch_key)
-//         {   
-//             // 1 表示本次允许执行抓取/旋转等动作
-//             Pump_Catch(&pump1, 1);
-//             //Arm_Catch(1);
-//         }
-//         if (arm_rotate_key)
-//         {
-//             Pump_Release(&pump1, 1);
-//             //Arm_Rotate(1);
-//         }
-//         if (arm_raiseandlower_key)
-//         {
-//             Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, arm_height);
-//             Motor_PosCtrl_SetRef(&pos_rotate_motor, arm_rotate_angle);
-//             Motor_PosCtrl_SetRef(&pos_catch_motor, arm_catch_angle);
-//         }
-//     }
-//     // Motor_VelCtrl_SetRef(&vel_rotate_motor,60.0f);
-//     /* 初始化完成后退出线程 */
-//     osThreadExit();
-// }
+/* ====================== 机械臂控制线程实现 ====================== */
 
 void Arm_Init(void *argument)
 {
@@ -530,16 +490,6 @@ void Arm_Raiseandlower(uint8_t enable)
     }
 }
 
-// /**
-//  * @brief 升降电机每次在当前位置基础上增加 50 度
-//  * @note  不改变原有高度分档逻辑，仅提供额外的步进控制接口
-//  */
-// void Arm_Raiseandlower_Step50()
-// {
-//     float current_angle = MotorCtrl_GetAngle(&pos_raiseandlower_motor);
-//     Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, current_angle + 50.0f);
-// }
-
 /**
  * @brief 抓取电机控制
  * @param target_angel 目标角(degree)
@@ -577,9 +527,18 @@ void Arm_Catch(uint8_t enable)
  * - Arm_GetStateRC:   返回当前步骤编号 g_pick_step，方便上位机/遥控显示
  */
 
-void Arm_SetLevelRC(Arm_PickLevel_t level)
+Arm_PickLevel_t Arm_SetLevelRC(Arm_PickLevel_t level)
 {
+    // 冲突逻辑：当状态机未回到初始步骤(0)时，禁止切换档位
+    // 只允许在 g_pick_step == 0 时更新高度档
+    if (g_pick_step != 0)
+    {
+        // 流程执行中，忽略本次切换请求，返回当前档位
+        return g_pick_level;
+    }
+
     g_pick_level = level;
+    return g_pick_level;
 }
 
 void Arm_StepRC(uint8_t step)
@@ -616,6 +575,7 @@ uint8_t Arm_GetStateRC(void)
 {
     return g_pick_step;
 }
+
 // 核心状态机：根据指定高度档和步进标志，执行下一步
 static void Arm_PickCore(Arm_PickLevel_t level)
 {
