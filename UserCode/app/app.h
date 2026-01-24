@@ -18,6 +18,14 @@
 #include "cmsis_os2.h"
 #include "usart.h"
 
+// 取卷轴高度档位
+typedef enum
+{
+    ARM_PICK_LEVEL_LOW = 0,  // 低卷轴（200 高度）
+    ARM_PICK_LEVEL_MID,      // 中卷轴（400 高度）
+    ARM_PICK_LEVEL_HIGH,     // 高卷轴（600 高度）
+} Arm_PickLevel_t;
+
 /*
     机械臂控制相关函数
     enable 标志位：1 执行，0 不执行

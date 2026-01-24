@@ -568,13 +568,6 @@ void Arm_Catch(uint8_t enable)
 
 /* ====================== 取卷轴一键流程（步进状态机） ====================== */
 
-typedef enum
-{
-    ARM_PICK_LEVEL_LOW = 0,
-    ARM_PICK_LEVEL_MID,
-    ARM_PICK_LEVEL_HIGH,
-} Arm_PickLevel_t;
-
 // 核心状态机：根据当前高度档和步进标志，执行下一步
 static void Arm_PickCore(Arm_PickLevel_t level)
 {
