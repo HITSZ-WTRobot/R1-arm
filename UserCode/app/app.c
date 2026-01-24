@@ -27,6 +27,9 @@ Pump_Config_t pump1_config = {
     .invert = 1
 };
 
+// 全局气泵句柄实例，供各控制流程复用
+Pump_t pump1;
+
 // 按键定义
 #define ARM_CATCH_KEY_GPIO_PORT GPIOE
 #define ARM_CATCH_KEY_GPIO_PIN GPIO_PIN_13
@@ -39,8 +42,8 @@ Pump_Config_t pump1_config = {
 #define ARM_RESET_ANGLE 0.0f    // 机械臂初始位置角度
 
 //CATCH: 抓取与释放角度参数
-#define ARM_CATCH_PUSH_ANGLE 200.0f   // 抓取结构推出时电机旋转角度
-#define ARM_CATCH_PUSH_ANGLE_MAX 250.0f  // 抓取结构推出最大角度
+#define ARM_CATCH_PUSH_ANGLE 250.0f   // 抓取结构推出时电机旋转角度
+#define ARM_CATCH_PUSH_ANGLE_MAX 280.0f  // 抓取结构推出最大角度
 
 //HEIGHT: 抓取与释放高度参数
 #define ARM_CATCH_HEIGHT_LOW 0.0f     //抓取200高度卷轴需要的抬升高度
@@ -168,6 +171,24 @@ Motor_PosCtrl_t pos_catch_motor;
 Motor_VelCtrl_t vel_rotate_motor;
 Motor_VelCtrl_t vel_raiseandlower_motor;
 Motor_VelCtrl_t vel_catch_motor;
+
+// 取卷轴流程步进标志与当前步骤
+static volatile uint8_t g_pick_step_trigger = 0; // 由按键置 1，流程函数读到后清零并前进一步
+static uint8_t         g_pick_step         = 0; // 当前执行到的步骤编号
+
+// 简单阻塞等待位置环就位，带超时保护
+static void Arm_WaitPosSettle(Motor_PosCtrl_t *hctrl, uint32_t timeout_ms)
+{
+    uint32_t start = HAL_GetTick();
+    while (!Motor_PosCtrl_IsSettle(hctrl))
+    {
+        if ((HAL_GetTick() - start) > timeout_ms)
+        {
+            break; // 超时直接退出，防止死等
+        }
+        osDelay(5);
+    }
+}
 
 
 /* ====================== 初始化代码 ====================== */
@@ -351,42 +372,86 @@ float arm_catch_angle = 0.0f;
  * 定时器回调函数，用于定时进行 PID 计算和 CAN 指令发送
  * @param htim unused
  */
+
+//调试代码
+// void Arm_Init(void *argument)
+// {
+//     /* 初始化代码 */
+//     DJI_Control_Init();
+//     Pump_Init(&pump1,&pump1_config);
+//     for (;;)
+//     {
+//         uint8_t arm_catch_key = ARM_CATCH_KEY_Pressed();
+//         uint8_t arm_rotate_key = ARM_ROTATE_KEY_Pressed();
+//         uint8_t arm_raiseandlower_key = ARM_RAISEANDLOWER_KEY_Pressed();
+//         if (arm_catch_key)
+//         {   
+//             // 1 表示本次允许执行抓取/旋转等动作
+//             Pump_Catch(&pump1, 1);
+//             //Arm_Catch(1);
+//         }
+//         if (arm_rotate_key)
+//         {
+//             Pump_Release(&pump1, 1);
+//             //Arm_Rotate(1);
+//         }
+//         if (arm_raiseandlower_key)
+//         {
+//             Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, arm_height);
+//             Motor_PosCtrl_SetRef(&pos_rotate_motor, arm_rotate_angle);
+//             Motor_PosCtrl_SetRef(&pos_catch_motor, arm_catch_angle);
+//         }
+//     }
+//     // Motor_VelCtrl_SetRef(&vel_rotate_motor,60.0f);
+//     /* 初始化完成后退出线程 */
+//     osThreadExit();
+// }
+
 void Arm_Init(void *argument)
 {
     
     /* 初始化代码 */
     DJI_Control_Init();
-    Pump_t pump1;
     Pump_Init(&pump1,&pump1_config);
     for (;;)
     {
-        uint8_t arm_catch_key = ARM_CATCH_KEY_Pressed();
-        uint8_t arm_rotate_key = ARM_ROTATE_KEY_Pressed();
-        uint8_t arm_raiseandlower_key = ARM_RAISEANDLOWER_KEY_Pressed();
-        if (arm_catch_key)
-        {   
-            // 1 表示本次允许执行抓取/旋转等动作
-            Pump_Catch(&pump1, 1);
-            //Arm_Catch(1);
-        }
-        if (arm_rotate_key)
+        uint8_t step_key  = ARM_CATCH_KEY_Pressed();       // 步进按键
+        uint8_t reset_key = ARM_ROTATE_KEY_Pressed();      // 复位按键
+        uint8_t null_key  = ARM_RAISEANDLOWER_KEY_Pressed(); // 预留按键（当前未用）
+
+        // 步进：每按一次步进键，让流程前进一步
+        if (step_key)
         {
+            g_pick_step_trigger = 1;
+        }
+
+        // 复位：清空流程状态，并将机械臂复位
+        if (reset_key)
+        {
+            g_pick_step        = 0;
+            g_pick_step_trigger = 0;
+
+            // 复位电机与气泵
+            Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_RESET_ANGLE);
+            Motor_PosCtrl_SetRef(&pos_catch_motor, ARM_RESET_ANGLE);
+            Motor_PosCtrl_SetRef(&pos_rotate_motor, ARM_RESET_ANGLE);
             Pump_Release(&pump1, 1);
-            //Arm_Rotate(1);
         }
-        if (arm_raiseandlower_key)
-        {
-            Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, arm_height);
-            Motor_PosCtrl_SetRef(&pos_rotate_motor, arm_rotate_angle);
-            Motor_PosCtrl_SetRef(&pos_catch_motor, arm_catch_angle);
-        }
+
+        // 预留按键目前不做处理，保留扩展空间
+        (void)null_key;
+
+        // 默认使用“高卷轴”流程做测试，如果需要中/低流程，可在此改为
+        // Arm_PickMid() 或 Arm_PickLow()，或在此处根据模式切换调用。
+        Arm_PickHigh();
+
+        osDelay(5);
     }
     
     // Motor_VelCtrl_SetRef(&vel_rotate_motor,60.0f);
     /* 初始化完成后退出线程 */
     osThreadExit();
 }
-
 
 
 /* ====================== 机械臂控制流程函数实现 ====================== */
@@ -499,4 +564,118 @@ void Arm_Catch(uint8_t enable)
               Motor_PosCtrl_SetRef(&pos_catch_motor, ARM_RESET_ANGLE);
               break;
     }
+}
+
+/* ====================== 取卷轴一键流程（步进状态机） ====================== */
+
+typedef enum
+{
+    ARM_PICK_LEVEL_LOW = 0,
+    ARM_PICK_LEVEL_MID,
+    ARM_PICK_LEVEL_HIGH,
+} Arm_PickLevel_t;
+
+// 核心状态机：根据当前高度档和步进标志，执行下一步
+static void Arm_PickCore(Arm_PickLevel_t level)
+{
+    if (!g_pick_step_trigger)
+    {
+        return; // 没有收到步进标志，不做任何动作
+    }
+
+    // 消费本次步进标志
+    g_pick_step_trigger = 0;
+
+    // 确保相关位置环启用
+    __MOTOR_CTRL_ENABLE(&pos_raiseandlower_motor);
+    __MOTOR_CTRL_ENABLE(&pos_catch_motor);
+
+    float catch_height   = 0.0f;
+    float release_height = 0.0f;
+
+    switch (level)
+    {
+    case ARM_PICK_LEVEL_HIGH:
+        catch_height   = ARM_CATCH_HEIGHT_HIGH;
+        release_height = ARM_RELEASE_HEIGHT_HIGH;
+        break;
+    case ARM_PICK_LEVEL_MID:
+        catch_height   = ARM_CATCH_HEIGHT_MID;
+        release_height = ARM_RELEASE_HEIGHT_MID;
+        break;
+    case ARM_PICK_LEVEL_LOW:
+    default:
+        catch_height   = ARM_CATCH_HEIGHT_LOW;
+        release_height = ARM_RELEASE_HEIGHT_LOW;
+        break;
+    }
+
+    switch (g_pick_step)
+    {
+    case 0:
+        // 1. 升降到对应“抓取高度”
+        Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, catch_height);
+        g_pick_step = 1;
+        break;
+
+    case 1:
+        // 2. 开启气泵抓取
+        Pump_Catch(&pump1, 1);
+        g_pick_step = 2;
+        break;
+
+    case 2:
+        // 3. 推出抓取机械臂
+        Motor_PosCtrl_SetRef(&pos_catch_motor, ARM_CATCH_PUSH_ANGLE);
+        g_pick_step = 3;
+        break;
+
+    case 3:
+        // 4. 收回抓取机械臂
+        Motor_PosCtrl_SetRef(&pos_catch_motor, ARM_RESET_ANGLE);
+        g_pick_step = 4;
+        break;
+
+    case 4:
+        // 5. 降到对应“释放高度”
+        Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, release_height);
+        g_pick_step = 5;
+        break;
+
+    case 5:
+        // 6. 关闭气泵 / 释放
+        Pump_Release(&pump1, 1);
+        g_pick_step = 6;
+        break;
+
+    case 6:
+        // 7. 全部复位
+        Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_RESET_ANGLE);
+        Motor_PosCtrl_SetRef(&pos_catch_motor, ARM_RESET_ANGLE);
+        Motor_PosCtrl_SetRef(&pos_rotate_motor, ARM_RESET_ANGLE);
+        g_pick_step = 0; // 流程结束，回到初始步骤
+        break;
+
+    default:
+        g_pick_step = 0;
+        break;
+    }
+}
+
+// 取较高卷轴（600 高度）
+void Arm_PickHigh(void)
+{
+    Arm_PickCore(ARM_PICK_LEVEL_HIGH);
+}
+
+// 取中等高度卷轴（400 高度）
+void Arm_PickMid(void)
+{
+    Arm_PickCore(ARM_PICK_LEVEL_MID);
+}
+
+// 取较低卷轴（200 高度）
+void Arm_PickLow(void)
+{
+    Arm_PickCore(ARM_PICK_LEVEL_LOW);
 }

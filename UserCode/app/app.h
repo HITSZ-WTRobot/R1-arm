@@ -28,5 +28,10 @@ void  Arm_Raiseandlower(uint8_t enable);// 机械臂升降控制函数
 void  Arm_Catch(uint8_t enable);// 机械臂抓取控制函数
 void  Arm_Raiseandlower_Step50();// 升降电机在当前位置基础上每次加 50 度
 
+// 一键取卷轴流程：高 / 中 / 低
+void Arm_PickHigh(void);
+void Arm_PickMid(void);
+void Arm_PickLow(void);
+
 
 #endif //APP_H
