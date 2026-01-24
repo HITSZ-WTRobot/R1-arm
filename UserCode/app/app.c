@@ -529,15 +529,15 @@ void Arm_Raiseandlower(uint8_t enable)
     }
 }
 
-/**
- * @brief 升降电机每次在当前位置基础上增加 50 度
- * @note  不改变原有高度分档逻辑，仅提供额外的步进控制接口
- */
-void Arm_Raiseandlower_Step50()
-{
-    float current_angle = MotorCtrl_GetAngle(&pos_raiseandlower_motor);
-    Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, current_angle + 50.0f);
-}
+// /**
+//  * @brief 升降电机每次在当前位置基础上增加 50 度
+//  * @note  不改变原有高度分档逻辑，仅提供额外的步进控制接口
+//  */
+// void Arm_Raiseandlower_Step50()
+// {
+//     float current_angle = MotorCtrl_GetAngle(&pos_raiseandlower_motor);
+//     Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, current_angle + 50.0f);
+// }
 
 /**
  * @brief 抓取电机控制
