@@ -59,7 +59,7 @@ osThreadId_t arm_InitHandle;
 const osThreadAttr_t arm_Init_attributes = {
   .name = "arm_Init",
   .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityRealtime7,
 };
 /* Definitions for pump_test */
 osThreadId_t pump_testHandle;
@@ -76,7 +76,7 @@ const osThreadAttr_t pump_test_attributes = {
 
 void StartDefaultTask(void *argument);
 extern void Arm_Init(void *argument);
-extern void Pump_test(void *argument);
+void Pump_test(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -149,6 +149,7 @@ void StartDefaultTask(void *argument)
 * @retval None
 */
 /* USER CODE END Header_Pump_test */
+extern void Pump_test(void *argument);
 
 
 /* Private application code --------------------------------------------------*/

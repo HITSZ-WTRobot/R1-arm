@@ -141,9 +141,9 @@ static inline uint8_t ARM_CATCH_KEY_Pressed(void)
     return Key_ScanPressedEvent(ARM_CATCH_KEY_GPIO_PORT, ARM_CATCH_KEY_GPIO_PIN);
 }
 
-static inline uint8_t ARM_ROTATE_KEY_IsHeld(void)
+static inline uint8_t ARM_ROTATE_KEY_Pressed(void)
 {
-    return Key_GetState(ARM_ROTATE_KEY_GPIO_PORT, ARM_ROTATE_KEY_GPIO_PIN);
+    return Key_ScanPressedEvent(ARM_ROTATE_KEY_GPIO_PORT, ARM_ROTATE_KEY_GPIO_PIN);
 }
 
 static inline uint8_t ARM_RAISEANDLOWER_KEY_Pressed(void)
@@ -211,19 +211,19 @@ void DJI_Control_Init()
                                 .auto_zero = false,       //< 是否在启动时自动清零角度
                                 .hcan = &hcan2,           //< 电机挂载在的 CAN 句柄
                                 .motor_type = M2006_C610, //< 电机类型
-                                .id1 = 3,                 //< 电调 ID (1~8)
+                                .id1 = 1,                 //< 电调 ID (1~8)
                             });
     DJI_Init(&raiseandlower_motor, &(DJI_Config_t){
                                        .auto_zero = false,       //< 是否在启动时自动清零角度
                                        .hcan = &hcan2,           //< 电机挂载在的 CAN 句柄
                                        .motor_type = M3508_C620, //< 电机类型
-                                       .id1 = 1,                 //< 电调 ID (1~8)
+                                       .id1 = 3,                 //< 电调 ID (1~8)
                                    });
     DJI_Init(&catch_motor, &(DJI_Config_t){
                                .auto_zero = false,       //< 是否在启动时自动清零角度
                                .hcan = &hcan2,           //< 电机挂载在的 CAN 句柄
                                .motor_type = M2006_C610, //< 电机类型
-                               .id1 = 4,                 //< 电调 ID (1~8)
+                               .id1 = 2,                 //< 电调 ID (1~8)
                            });
    
     Motor_VelCtrl_Init(&vel_catch_motor, //
@@ -368,43 +368,27 @@ void Arm_Init(void *argument)
 {
     
     /* 初始化代码 */
-    static uint8_t key1_prev_state = 0; // 记录Key1上一状态
+    static uint8_t rotate_running = 0; // 记录当前是否在旋转
     DJI_Control_Init();
     Pump_t pump1;
     Pump_Init(&pump1,&pump1_config);
-    Pump_RelayOn(&pump1);
-    Pump_ValveOff(&pump1);
+    Pump_Catch(&pump1);
     for (;;)
     {
         uint8_t arm_catch_key = ARM_CATCH_KEY_Pressed();
-        uint8_t arm_rotate_key_held = ARM_ROTATE_KEY_IsHeld();
+        uint8_t arm_rotate_key = ARM_ROTATE_KEY_Pressed();
         uint8_t arm_raiseandlower_key = ARM_RAISEANDLOWER_KEY_Pressed();
         if (arm_catch_key)
         {   
             Arm_Catch();
         }
-        if (arm_rotate_key_held)
+        if (arm_rotate_key)
         {
-            // 首次按下时切换模式
-            if (key1_prev_state == 0)
-            {
-                Arm_Rotate();
-            }
-            key1_prev_state = 1;
-        }
-        else
-        {
-            // 松开时停止
-            if (key1_prev_state == 1)
-            {
-                Arm_Rotate_Stop();
-                
-            }
-            key1_prev_state = 0;
+            Arm_Rotate();
         }
         if (arm_raiseandlower_key)
         {
-            Arm_Raiseandlower();
+            Arm_Raiseandlower_Step50();
         }
     }
     
@@ -476,6 +460,16 @@ void Arm_Raiseandlower()
             Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_RESET_ANGLE);
             break;
     }
+}
+
+/**
+ * @brief 升降电机每次在当前位置基础上增加 50 度
+ * @note  不改变原有高度分档逻辑，仅提供额外的步进控制接口
+ */
+void Arm_Raiseandlower_Step50()
+{
+    float current_angle = MotorCtrl_GetAngle(&pos_raiseandlower_motor);
+    Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, current_angle + 50.0f);
 }
 
 /**

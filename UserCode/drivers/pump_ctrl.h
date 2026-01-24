@@ -53,6 +53,10 @@ void Pump_ValveOff(Pump_t* hpump);  // 关闭电磁阀
 void Pump_RelayOn(Pump_t* hpump);   // 打开继电器
 void Pump_RelayOff(Pump_t* hpump);  // 关闭继电器
 
+//抓取和释放控制
+void Pump_Catch(Pump_t* hpump);   // 抓取
+void Pump_Release(Pump_t* hpump);  // 释放
+
 /* USER CODE END 0 */
 
 #ifdef __cplusplus
