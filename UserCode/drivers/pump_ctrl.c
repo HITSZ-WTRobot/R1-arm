@@ -71,14 +71,18 @@ void Pump_RelayOff(Pump_t* hpump)
     HAL_GPIO_WritePin(hpump->pump_port, hpump->pump_pin, GPIO_PIN_RESET);
 }
 
-void Pump_Catch(Pump_t* hpump)
+void Pump_Catch(Pump_t* hpump, uint8_t enable)
 {
+    if (!enable)
+        return;
     Pump_ValveOff(hpump);   // 关闭电磁阀
     Pump_RelayOn(hpump);   // 打开继电器
 }
 
-void Pump_Release(Pump_t* hpump)
+void Pump_Release(Pump_t* hpump, uint8_t enable)
 {
+    if (!enable)
+        return;
     Pump_ValveOn(hpump);   // 打开电磁阀
     Pump_RelayOff(hpump);  // 关闭继电器
 }

@@ -135,17 +135,6 @@ static uint8_t Key_ScanPressedEvent(GPIO_TypeDef *port, uint16_t pin)
     return 0;
 }
 
-static uint8_t Key_GetState(GPIO_TypeDef *port, uint16_t pin)
-{
-    GPIO_PinState read = HAL_GPIO_ReadPin(port, pin);
-    // 消抖处理
-    HAL_Delay(10);
-    if (HAL_GPIO_ReadPin(port, pin) != read)
-        return 0;
-    
-    return (read == KEY_PRESSED_LEVEL) ? 1 : 0;
-}
-
 // 测试按钮 - 全部替换为按键宏
 static inline uint8_t ARM_CATCH_KEY_Pressed(void)
 {
@@ -322,24 +311,6 @@ void DJI_Control_Init()
                                .abs_output_max = 8000.0f //< DJI_M3508_C620_IQ_MAX //< 限幅为电流控制最大值
                            },
                            .position_pid = (MotorPID_Config_t){
-                               .Kp = 5.0f,               //<
-                               .Ki = 0.2f,              //<
-                               .Kd = 0.50f,              //<
-                               .abs_output_max = 2000.0f //< 限速，这是外环对内环的输出限幅
-                           },
-                           .pos_vel_freq_ratio = 10, //< 内外环频率比（外环的频率可能需要比内环低）
-                       });
-    Motor_PosCtrl_Init(&pos_raiseandlower_motor, //
-                       &(Motor_PosCtrlConfig_t){
-                           .motor_type = MOTOR_TYPE_DJI,  //< 电机类型
-                           .motor = &raiseandlower_motor, //< 控制的电机
-                           .velocity_pid = (MotorPID_Config_t){
-                               .Kp = 100.0f,             //<
-                               .Ki = 0.001f,             //<
-                               .Kd = 0.5f,               //<
-                               .abs_output_max = 8000.0f //< DJI_M3508_C620_IQ_MAX //< 限幅为电流控制最大值
-                           },
-                           .position_pid = (MotorPID_Config_t){
                                .Kp = 2.0f,               //<
                                .Ki = 0.01f,              //<
                                .Kd = 0.20f,              //<
@@ -354,12 +325,14 @@ void DJI_Control_Init()
      * 控制实例在初始化时默认是启动的，所以大部分情况此步可以省略。
      * 但是在有多个控制实例的情况下，必须仅保持一个控制实例开启
      */
-     __MOTOR_CTRL_ENABLE(&pos_catch_motor);
+    // 初始化阶段不启用任何位置/速度环控制，
+    // 避免上电后电机立即锁死在某个初始位置。
+    __MOTOR_CTRL_DISABLE(&pos_catch_motor);
     __MOTOR_CTRL_DISABLE(&vel_catch_motor);
-    __MOTOR_CTRL_ENABLE(&pos_raiseandlower_motor);
+    __MOTOR_CTRL_DISABLE(&pos_raiseandlower_motor);
     __MOTOR_CTRL_DISABLE(&vel_raiseandlower_motor);
     __MOTOR_CTRL_DISABLE(&vel_rotate_motor);
-    __MOTOR_CTRL_ENABLE(&pos_rotate_motor);
+    __MOTOR_CTRL_DISABLE(&pos_rotate_motor);
     
     /*
      * Step6: 注册定时器回调并开启定时器
@@ -382,7 +355,6 @@ void Arm_Init(void *argument)
 {
     
     /* 初始化代码 */
-    static uint8_t rotate_running = 0; // 记录当前是否在旋转
     DJI_Control_Init();
     Pump_t pump1;
     Pump_Init(&pump1,&pump1_config);
@@ -393,13 +365,14 @@ void Arm_Init(void *argument)
         uint8_t arm_raiseandlower_key = ARM_RAISEANDLOWER_KEY_Pressed();
         if (arm_catch_key)
         {   
-            Pump_Catch(&pump1);
-            //Arm_Catch();
+            // 1 表示本次允许执行抓取/旋转等动作
+            Pump_Catch(&pump1, 1);
+            //Arm_Catch(1);
         }
         if (arm_rotate_key)
         {
-            Pump_Release(&pump1);
-            //Arm_Rotate();
+            Pump_Release(&pump1, 1);
+            //Arm_Rotate(1);
         }
         if (arm_raiseandlower_key)
         {
@@ -415,25 +388,21 @@ void Arm_Init(void *argument)
 }
 
 
-/**
- * @brief 气泵调试运行函数运行函数
-*/
-void Pump_test()
-{
-    Pump_t pump1;
-    Pump_Init(&pump1,&pump1_config);
-    Pump_RelayOn(&pump1);
-    Pump_ValveOff(&pump1);
-}
-
 
 /* ====================== 机械臂控制流程函数实现 ====================== */
 /**
  * @brief 旋转电机控制
  * @retval 1-成功（误差达标）
  */
-void Arm_Rotate()
+void Arm_Rotate(uint8_t enable)
 {    
+    if (!enable)
+    {
+        return;
+    }
+    // 在执行旋转动作前启用对应位置环控制
+    __MOTOR_CTRL_ENABLE(&pos_rotate_motor);
+
     static uint8_t rotate_state = 0;
     rotate_state++;
     switch (rotate_state)
@@ -466,8 +435,14 @@ void Arm_Rotate_Stop()
  * @param target_angel 目标角度(degree)
  * @retval 1-成功（误差达标）
  */
-void Arm_Raiseandlower()
+void Arm_Raiseandlower(uint8_t enable)
 {
+    if (!enable)
+    {
+        return;
+    }
+    // 在执行升降动作前启用对应位置环控制
+    __MOTOR_CTRL_ENABLE(&pos_raiseandlower_motor);
     static int height_level = 0;
     height_level++;
     
@@ -499,18 +474,19 @@ void Arm_Raiseandlower_Step50()
     Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, current_angle + 50.0f);
 }
 
-void Arm_Raiseandlower_SetHeight(float height)
-{
-    Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, height);
-}
-
 /**
  * @brief 抓取电机控制
  * @param target_angel 目标角(degree)
  * @retval 1-成功（误差达标）
  */
-void Arm_Catch()
+void Arm_Catch(uint8_t enable)
 {
+    if (!enable)
+    {
+        return;
+    }
+    // 在执行抓取动作前启用对应位置环控制
+    __MOTOR_CTRL_ENABLE(&pos_catch_motor);
     static uint8_t rotate_state = 0;
    rotate_state++;
     switch (rotate_state)
