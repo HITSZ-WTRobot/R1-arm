@@ -16,6 +16,7 @@
 #define PUMP_RELAY_Pin GPIO_PIN_4
 
 
+
 Pump_Config_t pump1_config = {
     .htim = &htim3,
     .channel = TIM_CHANNEL_1,
@@ -36,11 +37,21 @@ Pump_Config_t pump1_config = {
 
 // 机械臂关键位置参数
 #define ARM_RESET_ANGLE 0.0f    // 机械臂初始位置角度
-#define ARM_ROTATE_SPEED 60.0f   // 抓取位旋转速度
-#define ARM_CATCH_PUSH_ANGLE 50.0f   // 抓取结构推出时电机旋转角度
-#define ARM_RAISEANDLOWER_HEIGHT_LOW 200.0f  // 机械臂升降低位高度
-#define ARM_RAISEANDLOWER_HEIGHT_MIDDLE 800.0f // 机械臂升降中位高度
-#define ARM_RAISEANDLOWER_HEIGHT_HIGH 1400.0f  // 机械臂升降高位高度
+
+//CATCH: 抓取与释放角度参数
+#define ARM_CATCH_PUSH_ANGLE 200.0f   // 抓取结构推出时电机旋转角度
+#define ARM_CATCH_PUSH_ANGLE_MAX 250.0f  // 抓取结构推出最大角度
+
+//HEIGHT: 抓取与释放高度参数
+#define ARM_CATCH_HEIGHT_LOW 0.0f     //抓取200高度卷轴需要的抬升高度
+#define ARM_RELEASE_HEIGHT_LOW 1100.0f   //释放200高度卷轴需要的抬升高度
+#define ARM_CATCH_HEIGHT_MID 700.0f    //抓取400高度卷轴需要的抬升高度
+#define ARM_RELEASE_HEIGHT_MID 1100.0f  //释放400高度卷轴需要的抬升高度
+#define ARM_CATCH_HEIGHT_HIGH 1350.0f  //抓取600高度卷轴需要的抬升高度
+#define ARM_RELEASE_HEIGHT_HIGH 1100.0f //释放600高度卷轴需要的抬升高度
+
+//ROTATE_ANGLE: 抓取与释放旋转角度参数
+#define ARM_ROTATE_ANGLE -320.0f     //旋转转轴到存放需要的旋转角度
 
 // 按键扫描相关代码
 #define KEY_PRESSED_LEVEL GPIO_PIN_RESET
@@ -360,6 +371,9 @@ void DJI_Control_Init()
     HAL_TIM_Base_Start_IT(&htim6);
 }
 
+float arm_height = 0.0f;
+float arm_rotate_angle = 0.0f;
+float arm_catch_angle = 0.0f;
 /**
  * 定时器回调函数，用于定时进行 PID 计算和 CAN 指令发送
  * @param htim unused
@@ -372,7 +386,6 @@ void Arm_Init(void *argument)
     DJI_Control_Init();
     Pump_t pump1;
     Pump_Init(&pump1,&pump1_config);
-    Pump_Catch(&pump1);
     for (;;)
     {
         uint8_t arm_catch_key = ARM_CATCH_KEY_Pressed();
@@ -380,15 +393,19 @@ void Arm_Init(void *argument)
         uint8_t arm_raiseandlower_key = ARM_RAISEANDLOWER_KEY_Pressed();
         if (arm_catch_key)
         {   
-            Arm_Catch();
+            Pump_Catch(&pump1);
+            //Arm_Catch();
         }
         if (arm_rotate_key)
         {
-            Arm_Rotate();
+            Pump_Release(&pump1);
+            //Arm_Rotate();
         }
         if (arm_raiseandlower_key)
         {
-            Arm_Raiseandlower_Step50();
+            Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, arm_height);
+            Motor_PosCtrl_SetRef(&pos_rotate_motor, arm_rotate_angle);
+            Motor_PosCtrl_SetRef(&pos_catch_motor, arm_catch_angle);
         }
     }
     
@@ -416,11 +433,21 @@ void Pump_test()
  * @retval 1-成功（误差达标）
  */
 void Arm_Rotate()
-{
-    __MOTOR_CTRL_DISABLE(&pos_rotate_motor); // 关闭位置环
-    __MOTOR_CTRL_ENABLE(&vel_rotate_motor);  // 开启速度环
-    Motor_VelCtrl_SetRef(&vel_rotate_motor, ARM_ROTATE_SPEED); // 设置转速
+{    
+    static uint8_t rotate_state = 0;
+    rotate_state++;
+    switch (rotate_state)
+    {
+         case 1:
+              Motor_PosCtrl_SetRef(&pos_rotate_motor, ARM_ROTATE_ANGLE);
+              break;
+         default:
+              rotate_state = 0;
+              Motor_PosCtrl_SetRef(&pos_rotate_motor, ARM_RESET_ANGLE);
+              break;
+    }
 }
+
 
 void Arm_Rotate_Stop()
 {
@@ -447,13 +474,13 @@ void Arm_Raiseandlower()
     switch (height_level)
     {
         case 1:
-            Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_RAISEANDLOWER_HEIGHT_LOW);
+            Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_CATCH_HEIGHT_LOW);
             break;
         case 2:
-            Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_RAISEANDLOWER_HEIGHT_MIDDLE);
+            Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_CATCH_HEIGHT_MID);
             break;
         case 3:
-            Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_RAISEANDLOWER_HEIGHT_HIGH);
+            Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_CATCH_HEIGHT_HIGH);
             break;
         default:
             height_level = 0;
@@ -470,6 +497,11 @@ void Arm_Raiseandlower_Step50()
 {
     float current_angle = MotorCtrl_GetAngle(&pos_raiseandlower_motor);
     Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, current_angle + 50.0f);
+}
+
+void Arm_Raiseandlower_SetHeight(float height)
+{
+    Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, height);
 }
 
 /**

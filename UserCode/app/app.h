@@ -26,7 +26,7 @@ void Arm_Rotate_Stop();// 机械臂旋转停止函数
 void  Arm_Raiseandlower();// 机械臂升降控制函数
 void  Arm_Catch();// 机械臂抓取控制函数
 void  Arm_Raiseandlower_Step50();// 升降电机在当前位置基础上每次加 50 度
-
+void Arm_Raiseandlower_SetHeight(float height);// 机械臂升降控制函数，设置具体高度
 
 
 #endif //APP_H
