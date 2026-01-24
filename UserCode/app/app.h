@@ -43,5 +43,11 @@ void Arm_PickHigh(void);
 void Arm_PickMid(void);
 void Arm_PickLow(void);
 
+// 遥控器/上层控制调用接口（输入均为 1/0 或枚举）
+void Arm_SetLevelRC(Arm_PickLevel_t level); // 设置当前 LEVEL 档位
+void Arm_StepRC(uint8_t step);              // STEP 输入：1 表示本周期按下，0 表示松开
+void Arm_ResetRC(uint8_t reset);            // RESET 输入：1 表示本周期按下，0 表示松开
+uint8_t Arm_GetStateRC(void);               // 获取当前步骤编号，便于显示/调试
+
 
 #endif //APP_H

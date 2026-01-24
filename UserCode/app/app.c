@@ -173,8 +173,9 @@ Motor_VelCtrl_t vel_raiseandlower_motor;
 Motor_VelCtrl_t vel_catch_motor;
 
 // 取卷轴流程步进标志与当前步骤
-static volatile uint8_t g_pick_step_trigger = 0; // 由按键置 1，流程函数读到后清零并前进一步
-static uint8_t         g_pick_step         = 0; // 当前执行到的步骤编号
+static volatile uint8_t g_pick_step_trigger = 0; // 由按键/遥控 step 置 1，流程函数读到后清零并前进一步
+static uint8_t          g_pick_step         = 0; // 当前执行到的步骤编号
+static Arm_PickLevel_t  g_pick_level       = ARM_PICK_LEVEL_HIGH; // 当前高度档位（给 LEVEL 接口使用）
 
 // 简单阻塞等待位置环就位，带超时保护
 static void Arm_WaitPosSettle(Motor_PosCtrl_t *hctrl, uint32_t timeout_ms)
@@ -568,7 +569,54 @@ void Arm_Catch(uint8_t enable)
 
 /* ====================== 取卷轴一键流程（步进状态机） ====================== */
 
-// 核心状态机：根据当前高度档和步进标志，执行下一步
+/**
+ * 遥控器/上层调用接口：LEVEL / STEP / RESET
+ * - Arm_SetLevelRC:   设置当前高度档（外部可以先把 1/0 映射成枚举再调用）
+ * - Arm_StepRC:       传入遥控 step 信号(1/0)，内部做上升沿检测并触发一步
+ * - Arm_ResetRC:      传入遥控 reset 信号(1/0)，上升沿时复位流程和机械臂
+ * - Arm_GetStateRC:   返回当前步骤编号 g_pick_step，方便上位机/遥控显示
+ */
+
+void Arm_SetLevelRC(Arm_PickLevel_t level)
+{
+    g_pick_level = level;
+}
+
+void Arm_StepRC(uint8_t step)
+{
+    static uint8_t last_step = 0;
+
+    // 只在 0->1 上升沿时触发一次步进
+    if (step && !last_step)
+    {
+        g_pick_step_trigger = 1;
+    }
+    last_step = step;
+}
+
+void Arm_ResetRC(uint8_t reset)
+{
+    static uint8_t last_reset = 0;
+
+    if (reset && !last_reset)
+    {
+        // 上升沿：复位流程状态并将机械臂复位到初始位置
+        g_pick_step          = 0;
+        g_pick_step_trigger  = 0;
+
+        Motor_PosCtrl_SetRef(&pos_raiseandlower_motor, ARM_RESET_ANGLE);
+        Motor_PosCtrl_SetRef(&pos_catch_motor, ARM_RESET_ANGLE);
+        Motor_PosCtrl_SetRef(&pos_rotate_motor, ARM_RESET_ANGLE);
+        Pump_Release(&pump1, 1);
+    }
+    last_reset = reset;
+}
+
+uint8_t Arm_GetStateRC(void)
+{
+    return g_pick_step;
+}
+// 核心状态机：根据指定高度档和步进标志，执行下一步
 static void Arm_PickCore(Arm_PickLevel_t level)
 {
     if (!g_pick_step_trigger)
